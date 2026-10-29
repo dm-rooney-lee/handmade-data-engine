@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>01 · Time</title>
+<style>
+  :root {
+    --bg: #fbfaf7;
+    --surface: #ffffff;
+    --text: #1f1f1d;
+    --muted: #6b6a65;
+    --border: #e4e1d9;
+    --accent: #c2410c;
+    --accent-2: #2563eb;
+    --code-bg: #f3f1ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161614;
+      --surface: #1f1f1c;
+      --text: #ecebe6;
+      --muted: #a09e96;
+      --border: #34332f;
+      --accent: #fb923c;
+      --accent-2: #60a5fa;
+      --code-bg: #2a2925;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161614;
+    --surface: #1f1f1c;
+    --text: #ecebe6;
+    --muted: #a09e96;
+    --border: #34332f;
+    --accent: #fb923c;
+    --accent-2: #60a5fa;
+    --code-bg: #2a2925;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 16px 96px; }
+  h1 { font-size: 2rem; margin: 0 0 4px; }
+  .lede { color: var(--muted); margin: 0 0 40px; }
+  h2 { font-size: 1.3rem; margin: 56px 0 12px; padding-top: 16px; border-top: 1px solid var(--border); }
+  h2 .num { color: var(--accent); margin-right: 8px; }
+  h3 { font-size: 1.05rem; margin: 28px 0 8px; }
+  p, li { color: var(--text); }
+  code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; font-size: 0.9em; }
+  pre { background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.9em; line-height: 1.5; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.94em; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .table-wrap { overflow-x: auto; }
+  .callout { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; padding: 12px 16px; margin: 16px 0; }
+  .callout p { margin: 0; }
+  figure { margin: 20px 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  figure svg { width: 100%; height: auto; display: block; color: var(--text); }
+  figcaption { color: var(--muted); font-size: 0.88em; margin-top: 8px; }
+  .muted { color: var(--muted); }
+  nav ol { padding-left: 20px; margin: 0; }
+  nav a { color: var(--text); }
+</style>
+</head>
+<body>
+<main>
+  <h1>01 · Time</h1>
+  <p class="lede">Every stage of this project ultimately comes down to "putting data stamped by different clocks onto a single timeline."</p>
+
+  <nav>
+    <ol>
+      <li><a href="#why">Why time is central</a></li>
+      <li><a href="#hw">How computers keep time</a></li>
+      <li><a href="#domain">Clock domains: offset and drift</a></li>
+      <li><a href="#clocks">Wall clock vs monotonic clock</a></li>
+      <li><a href="#jitter">Sampling and jitter</a></li>
+      <li><a href="#sync">Aligning two clocks: RTT-based offset estimation</a></li>
+      <li><a href="#stamp">Where to take the timestamp</a></li>
+      <li><a href="#terms">Glossary</a></li>
+    </ol>
+  </nav>
+
+  <h2 id="why"><span class="num">1</span>Why time is central</h2>
+  <p>Think about the moment a hand touches a cup. In the video, there is a frame where the fingers meet the cup's surface; in the tactile sensor, there is a sample where pressure spikes. Only if we can say these two are <b>the same moment</b> does the data mean "this much force was applied in this scene."</p>
+  <p>Frames in 30fps video are about 33ms apart; samples in 1kHz tactile data are 1ms apart. If the two streams are off by even a few tens of ms, the contact moment slips by a frame or more, and the labels become wrong.</p>
+  <div class="callout"><p>This is why OpenGraph Labs leads with "sub-millisecond synchronization." Sync sets the floor for data quality.</p></div>
+
+  <h2 id="hw"><span class="num">2</span>How computers keep time</h2>
+  <p>A clock doesn't know what time it is. It only counts ticks.</p>
+  <pre><code>quartz crystal → oscillator circuit → steady ticks → counter → time = ticks / frequency</code></pre>
+  <ul>
+    <li><b>Crystal oscillator</b>: a circuit that uses the piezoelectric effect of a quartz crystal to oscillate at a very stable frequency. A quartz watch uses 32,768 Hz (2<sup>15</sup>), halved 15 times to get exactly one tick per second.</li>
+    <li><b>PC</b>: a hardware counter in the CPU/SoC (TSC on x86, the ARM generic timer on Apple Silicon) increments from boot. The OS divides it by its frequency to get elapsed time, and <b>builds its monotonic clock on top of this counter</b>.</li>
+    <li><b>ESP32</b>: typically runs off a 40MHz crystal, and <code>esp_timer</code> counts microseconds since boot. So its clock restarts at 0 on every power-up.</li>
+  </ul>
+
+  <h3>Where the wall clock comes from</h3>
+  <pre><code>wall clock = real time at boot (offset) + elapsed time since boot (counter)</code></pre>
+  <ul>
+    <li><b>RTC (real-time clock)</b>: a separate chip on the motherboard with its own 32,768 Hz crystal and a coin battery. It keeps counting while the PC is off, and the OS reads it at boot for a rough current time.</li>
+    <li><b>NTP</b>: every few minutes to tens of minutes, it measures the error against a reference server using the same round trip described in <a href="#sync">section 6</a>. It corrects the offset and also estimates how many ppm the local crystal is off, adjusting the clock's rate. Between syncs, the OS keeps counting on the local crystal.</li>
+  </ul>
+
+  <h3>What "0 ppm" means</h3>
+  <p>ppm is always measured <b>relative to a more accurate reference</b>: run both clocks side by side for a while and compare.</p>
+  <pre><code>drift (ppm) = (local elapsed − reference elapsed) / reference elapsed × 10^6</code></pre>
+  <ul>
+    <li>The ultimate reference is the definition of the SI second: 9,192,631,770 periods of the radiation from a specific transition of the cesium-133 atom. Atomic clocks realize it with errors around 10<sup>-15</sup>, effectively zero on a ppm scale. TAI and UTC are computed from hundreds of atomic clocks worldwide.</li>
+    <li>Atomic clocks are too big, power-hungry, and expensive to put in every device, so their time is passed down a chain: atomic clocks → GPS satellites (which carry atomic clocks) → GPS receivers / NTP stratum 1 servers → stratum 2 servers → your PC. Each level corrects itself against the one above, and network latency adds a little error at every step.</li>
+  </ul>
+  <div class="callout"><p>This project doesn't need absolute time; it needs <b>every stream to agree</b>. Pick the host clock as the reference for a session and align everything else to it. Better still, sensors that share one clock (e.g. all FSRs and the IMU sampled by the same ESP32 timer) have zero drift between them. Design to keep the number of clock domains small.</p></div>
+
+  <h2 id="domain"><span class="num">3</span>Clock domains: offset and drift</h2>
+  <p>The webcam, the ESP32, the audio device, and the PC each count time with their own crystal oscillator. The scope governed by a single clock is called a <b>clock domain</b>. Timestamps from different domains can't be compared directly.</p>
+  <p>The difference between two clocks breaks down into two components.</p>
+  <ul>
+    <li><b>Offset</b>: the difference between the two clocks' readings <b>at the same instant</b>. It exists in the first place because the clocks started counting at different points (the ESP32 clock starts at 0 when powered on; the PC's monotonic clock starts from an arbitrary point), but the offset is the difference itself, not either starting point.</li>
+    <li><b>Drift</b>: a difference in rate. Every crystal oscillates at a slightly different frequency, so the gap widens over time. It's measured in <b>ppm</b> (parts per million); 40ppm means the clocks diverge by 40µs every second.</li>
+  </ul>
+  <p>Because of drift, the offset is not a constant: it changes over time. Its value at a chosen reference time, such as the start of a session, is called the <b>initial offset</b> (offset₀). With host time x measured from that reference:</p>
+  <pre><code>offset(x) = offset₀ + drift × x</code></pre>
+  <p>Offset is a linear function of host time: the intercept is the initial offset and the slope is the drift. An exaggerated example, with a device clock running 10% fast and starting 5 s ahead:</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Host time</th><th>Device time</th><th>Offset (device − host)</th></tr></thead>
+    <tbody>
+      <tr><td>0 s</td><td>5 s</td><td>5 s (= offset₀)</td></tr>
+      <tr><td>10 s</td><td>16 s</td><td>6 s</td></tr>
+      <tr><td>20 s</td><td>27 s</td><td>7 s</td></tr>
+      <tr><td>30 s</td><td>38 s</td><td>8 s</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>A single measurement gives only the offset at that instant. Drift shows up only when you compare offsets measured at two different times: (8 − 5) / (30 − 0) = 0.1.</p>
+
+  <figure>
+    <svg viewBox="0 0 640 260" role="img" aria-label="Offset and drift between the host clock and a device clock">
+      <line x1="60" y1="220" x2="610" y2="220" stroke="currentColor" stroke-opacity="0.4"/>
+      <line x1="60" y1="220" x2="60" y2="20" stroke="currentColor" stroke-opacity="0.4"/>
+      <text x="610" y="245" text-anchor="end" font-size="13" fill="currentColor" fill-opacity="0.7">real time</text>
+      <text x="50" y="30" text-anchor="end" font-size="13" fill="currentColor" fill-opacity="0.7">reading</text>
+      <line x1="60" y1="180" x2="600" y2="70" stroke="var(--accent-2)" stroke-width="2.5"/>
+      <text x="604" y="74" font-size="13" fill="var(--accent-2)">host</text>
+      <line x1="60" y1="140" x2="600" y2="20" stroke="var(--accent)" stroke-width="2.5"/>
+      <text x="604" y="24" font-size="13" fill="var(--accent)">device</text>
+      <line x1="80" y1="176" x2="80" y2="136" stroke="currentColor" stroke-dasharray="3 3"/>
+      <text x="88" y="162" font-size="13" fill="currentColor">offset₀</text>
+      <line x1="560" y1="78" x2="560" y2="29" stroke="currentColor" stroke-dasharray="3 3"/>
+      <text x="452" y="58" font-size="13" fill="currentColor">offset₀ + drift×t</text>
+    </svg>
+    <figcaption>Different slopes = drift. Even if you align the offset once at the start, the clocks drift apart again over time.</figcaption>
+  </figure>
+
+  <h3>How large the drift error gets</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Drift</th><th>After 1 min</th><th>After 10 min</th><th>After 1 hour</th></tr></thead>
+    <tbody>
+      <tr><td>10 ppm</td><td>0.6 ms</td><td>6 ms</td><td>36 ms</td></tr>
+      <tr><td>40 ppm</td><td>2.4 ms</td><td>24 ms</td><td>144 ms</td></tr>
+      <tr><td>100 ppm</td><td>6 ms</td><td>60 ms</td><td>360 ms</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="muted">A cheap crystal is typically off its nominal frequency (measured against true time) by tens of ppm, and two such clocks can differ from each other by up to the sum. It also varies with temperature. Even a 10-minute recording can end up nearly a video frame off.</p>
+
+  <h2 id="clocks"><span class="num">4</span>Wall clock vs monotonic clock</h2>
+  <p>Even within one PC there are several kinds of clocks. Two properties matter most.</p>
+  <ul>
+    <li><b>adjustable</b>: can its value be changed externally (NTP correction, user settings)?</li>
+    <li><b>monotonic</b>: is it guaranteed never to go backwards?</li>
+  </ul>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Python</th><th>Reference point</th><th>Use</th></tr></thead>
+    <tbody>
+      <tr><td><code>time.time_ns()</code></td><td>Unix epoch (1970-01-01)</td><td>Human-readable date/time, logs. <b>Unsuitable for measuring intervals</b></td></tr>
+      <tr><td><code>time.monotonic_ns()</code></td><td>Arbitrary</td><td>Timestamps, interval measurement, timeouts</td></tr>
+      <tr><td><code>time.perf_counter_ns()</code></td><td>Arbitrary</td><td>High-resolution measurement of short intervals (benchmarks)</td></tr>
+      <tr><td><code>time.process_time_ns()</code></td><td>Arbitrary</td><td>CPU time used by the process. Stops while sleeping</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>The wall clock can jump forward or backward the moment NTP corrects it. If that happens mid-recording, timestamps go backwards or develop gaps. It's the same problem as occasionally getting a negative request duration when you measure it with differences of <code>time.time()</code> in a backend.</p>
+  <p>Note that the problem is <b>not</b> drift accumulated since 1970. The epoch is just the counting origin, and NTP keeps the wall clock close to true time, so in absolute terms it is more accurate than the monotonic clock. The problem is that it is <b>adjustable</b>. A monotonic clock does drift relative to true time (40ppm is only 0.4ms over a 10-second interval), but it never jumps, and that's what interval measurement needs.</p>
+  <div class="callout"><p>A monotonic clock's value has no meaning on its own. Only <b>the difference between two values from the same clock</b> is meaningful. To compare it with another device's monotonic value, you need to find the offset separately.</p></div>
+  <p class="muted">The actual reference point, resolution, and implementation vary by OS, by language, and by language version. Check this machine's values with <code>labs/1_clocks.py</code>.</p>
+
+  <h2 id="jitter"><span class="num">5</span>Sampling and jitter</h2>
+
+  <h3>What a sample is</h3>
+  <ul>
+    <li>A sensor turns a physical quantity into a <b>continuously varying voltage</b>. For an FSR: a finger presses → resistance drops → the voltage in the circuit changes.</li>
+    <li>A computer can't store a continuous value, only a sequence of numbers. So the ESP32's <b>ADC</b> (analog-to-digital converter) turns the voltage at one instant into a number, e.g. 0–4095. That snapshot is one <b>sample</b>.</li>
+    <li>Sampling runs <b>continuously at a fixed interval, whether or not anything is happening</b>. At 1kHz, a 50ms tap yields about 50 samples and a 2-second grasp about 2,000. We sample continuously because we can't know when contact will happen, and because what we want is the shape of the force over time (onset, rise, hold, release).</li>
+  </ul>
+
+  <h3>Where the period comes from, and why Hz</h3>
+  <p>The interval between samples, the <b>period T</b>, is set by us, not by the sensor. A hardware timer counts crystal ticks and fires an interrupt, e.g. every 40,000 ticks of a 40MHz crystal = every 1ms. Sampling is then a repeating event, and Hz simply means "times per second" for any repeating event, not just vibrations.</p>
+  <pre><code>sampling rate f = 1 / T        T = 1ms  →  f = 1,000 Hz = 1kHz</code></pre>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Sensor</th><th>One sample =</th><th>Rate</th></tr></thead>
+    <tbody>
+      <tr><td>FSR (tactile)</td><td>The pressure voltage at that instant</td><td>1kHz</td></tr>
+      <tr><td>IMU</td><td>Acceleration and angular velocity at that instant</td><td>Hundreds of Hz</td></tr>
+      <tr><td>Webcam</td><td>One image (a frame)</td><td>30–60Hz (= fps)</td></tr>
+      <tr><td>Microphone</td><td>The diaphragm voltage at that instant</td><td>48kHz</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="muted">Since the timer counts crystal ticks, crystal drift makes the sampling rate drift by the same ppm.</p>
+
+  <h3>How fast is fast enough</h3>
+  <p>Sample faster than <b>twice the fastest change</b> you want to capture (the Nyquist criterion). Sample slower and fast changes don't just disappear; they show up as fake slow changes, called <b>aliasing</b> (like wagon wheels appearing to spin backwards on film).</p>
+  <ul>
+    <li>Hand motion is roughly up to ~10Hz → 30–60fps video is enough.</li>
+    <li>Contact transients and slip vibrations reach hundreds of Hz → tactile needs ~1kHz.</li>
+    <li>Human hearing tops out around 20kHz → audio uses 44.1–48kHz.</li>
+  </ul>
+  <p class="muted">These bands are rough figures. Check what the glove data actually needs in A2.</p>
+
+  <h3>Jitter</h3>
+  <p>At a 1kHz target, every interval should be exactly 1ms. In practice it varies a little every time. That variation is <b>jitter</b>.</p>
+  <figure>
+    <svg viewBox="0 0 640 150" role="img" aria-label="Ideal versus actual sample times">
+      <text x="10" y="45" font-size="13" fill="currentColor" fill-opacity="0.7">ideal</text>
+      <line x1="70" y1="40" x2="620" y2="40" stroke="currentColor" stroke-opacity="0.3"/>
+      <g fill="var(--accent-2)">
+        <circle cx="90" cy="40" r="5"/><circle cx="190" cy="40" r="5"/><circle cx="290" cy="40" r="5"/>
+        <circle cx="390" cy="40" r="5"/><circle cx="490" cy="40" r="5"/><circle cx="590" cy="40" r="5"/>
+      </g>
+      <text x="10" y="105" font-size="13" fill="currentColor" fill-opacity="0.7">actual</text>
+      <line x1="70" y1="100" x2="620" y2="100" stroke="currentColor" stroke-opacity="0.3"/>
+      <g fill="var(--accent)">
+        <circle cx="90" cy="100" r="5"/><circle cx="203" cy="100" r="5"/><circle cx="296" cy="100" r="5"/>
+        <circle cx="425" cy="100" r="5"/><circle cx="502" cy="100" r="5"/><circle cx="598" cy="100" r="5"/>
+      </g>
+      <g stroke="currentColor" stroke-opacity="0.35" stroke-dasharray="2 3">
+        <line x1="190" y1="46" x2="203" y2="94"/><line x1="290" y1="46" x2="296" y2="94"/>
+        <line x1="390" y1="46" x2="425" y2="94"/><line x1="490" y1="46" x2="502" y2="94"/>
+        <line x1="590" y1="46" x2="598" y2="94"/>
+      </g>
+      <text x="400" y="135" font-size="12" fill="currentColor" fill-opacity="0.7">one big delay (OS scheduling)</text>
+    </svg>
+    <figcaption>Even when the average rate is right, individual intervals wobble. Tail values like p99 and max matter more than the mean.</figcaption>
+  </figure>
+
+  <h3>Why it wobbles</h3>
+  <ul>
+    <li>General-purpose OSes like macOS, Linux, and Windows are not real-time OSes. <code>sleep(0.001)</code> is a request to "wake me up no earlier than 1ms from now"; when you actually wake up is up to the scheduler.</li>
+    <li>Other processes, power management, GC, and interrupt handling can delay it further.</li>
+  </ul>
+
+  <h3>Two ways to write the loop</h3>
+  <pre><code># relative sleep: "sleep 1ms from now"
+while True:
+    sample()
+    sleep(period)
+
+# absolute deadline: "sleep until start + i×period"
+for i in count():
+    sleep_until(start + i * period)
+    sample()</code></pre>
+  <p>The two differ in how a late wake-up carries over into the next sample. See how that difference shows up in long-run rate and accumulated error with <code>labs/2_sleep_jitter.py</code>.</p>
+
+  <div class="callout"><p>It's hard to hold a steady 1kHz in a Python loop on a PC. That's why fast sensors like tactile ones are <b>sampled by a microcontroller (ESP32) using a hardware timer</b>, and the PC only receives and stores the data.</p></div>
+
+  <h2 id="sync"><span class="num">6</span>Aligning two clocks: RTT-based offset estimation</h2>
+  <p>The only way to learn the offset between the PC and the ESP32 is to exchange messages. The principle is the same as NTP.</p>
+  <figure>
+    <svg viewBox="0 0 640 230" role="img" aria-label="Ping round trip and timestamps between host and device">
+      <text x="30" y="40" font-size="14" fill="var(--accent-2)" font-weight="600">host</text>
+      <line x1="90" y1="35" x2="610" y2="35" stroke="var(--accent-2)" stroke-width="2"/>
+      <text x="30" y="190" font-size="14" fill="var(--accent)" font-weight="600">device</text>
+      <line x1="90" y1="185" x2="610" y2="185" stroke="var(--accent)" stroke-width="2"/>
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <line x1="150" y1="35" x2="320" y2="183" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <line x1="320" y1="185" x2="520" y2="37" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <circle cx="150" cy="35" r="5" fill="var(--accent-2)"/>
+      <circle cx="320" cy="185" r="5" fill="var(--accent)"/>
+      <circle cx="520" cy="35" r="5" fill="var(--accent-2)"/>
+      <text x="150" y="22" text-anchor="middle" font-size="13" fill="currentColor">t1 send</text>
+      <text x="320" y="212" text-anchor="middle" font-size="13" fill="currentColor">t2 stamped on device clock</text>
+      <text x="520" y="22" text-anchor="middle" font-size="13" fill="currentColor">t4 receive</text>
+      <text x="200" y="120" font-size="12" fill="currentColor" fill-opacity="0.7">uplink latency</text>
+      <text x="430" y="120" font-size="12" fill="currentColor" fill-opacity="0.7">downlink latency</text>
+    </svg>
+    <figcaption>t1 and t4 are on the host clock; t2 is on the device clock. RTT = t4 − t1.</figcaption>
+  </figure>
+  <p>Assuming uplink and downlink latency are equal, the moment the device stamped t2 corresponds to <code>(t1 + t4) / 2</code> on the host clock. So</p>
+  <pre><code>offset ≈ t2 − (t1 + t4) / 2</code></pre>
+  <p>The error equals how wrong that assumption is: <b>half the difference between uplink and downlink latency</b>. No matter how clever the calculation, this error can't exceed RTT/2. The shorter the round trip, the smaller the error bound.</p>
+
+  <h3>Reducing error with repeated measurements</h3>
+  <ul>
+    <li><b>Mean</b>: average the offset estimates from many pings.</li>
+    <li><b>Minimum RTT</b>: trust only the ping with the shortest RTT. It's the sample with the smallest error bound.</li>
+  </ul>
+  <p>Which is better depends on how latency is distributed. Check it in <code>labs/3_clock_offset.py</code>.</p>
+
+  <h3>Drift correction</h3>
+  <p>Because of drift, the offset changes over time. So measure the offset at both the <b>start and end</b> of a recording, and draw a straight line between them.</p>
+  <pre><code>slope  = (offset_end − offset_start) / (t_end − t_start)   # = drift
+offset(t) = offset_start + slope × (t − t_start)</code></pre>
+  <p class="muted">If drift isn't constant (e.g. due to temperature changes), a straight line isn't enough. Then you measure periodically during the recording too, and align piecewise.</p>
+
+  <h2 id="stamp"><span class="num">7</span>Where to take the timestamp</h2>
+  <p>Even for the same tactile sample, there are several places the time could be stamped.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Where</th><th>Upside</th><th>Problem</th></tr></thead>
+    <tbody>
+      <tr><td>On the device at the moment of sampling (device timestamp)</td><td>Closest to the actual measurement time</td><td>It's in the device clock domain, so it needs offset/drift correction</td></tr>
+      <tr><td>On the PC at the moment of arrival (host arrival)</td><td>It's on the host clock from the start, so it's directly comparable</td><td>USB latency, buffering, and scheduling delays all get mixed in. Several samples can also arrive bundled together</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>The standard approach is to <b>stamp on the device and convert to the host clock</b>. That's why SyncField's timestamp records have <code>device_timestamp_ns</code> and <code>clock_domain</code> fields separate from <code>capture_ns</code>. We'll see how they actually handle this in the next topic (reading the SyncField code).</p>
+
+  <h2 id="terms"><span class="num">8</span>Glossary</h2>
+  <div class="table-wrap">
+  <table>
+    <tbody>
+      <tr><th>crystal oscillator</th><td>A circuit that uses a quartz crystal to produce a stable frequency (ticks)</td></tr>
+      <tr><th>RTC</th><td>Real-time clock. A battery-backed chip that keeps time while the device is off</td></tr>
+      <tr><th>NTP</th><td>Network Time Protocol. Periodically corrects a clock's offset and rate against a reference server</td></tr>
+      <tr><th>clock domain</th><td>The scope governed by a single clock</td></tr>
+      <tr><th>offset</th><td>The difference between two clocks' readings at the same instant. Changes over time with drift</td></tr>
+      <tr><th>initial offset</th><td>The offset at a chosen reference time, such as session start. The intercept in offset(x) = offset₀ + drift × x</td></tr>
+      <tr><th>drift</th><td>The difference in rate between two clocks, in ppm</td></tr>
+      <tr><th>monotonic</th><td>The property of never going backwards</td></tr>
+      <tr><th>ADC</th><td>Analog-to-digital converter. Turns a voltage at one instant into a number</td></tr>
+      <tr><th>sample</th><td>A snapshot of a continuous signal at one instant</td></tr>
+      <tr><th>sampling rate</th><td>Samples per second (Hz). The inverse of the period</td></tr>
+      <tr><th>Nyquist / aliasing</th><td>Sample faster than twice the fastest change; otherwise fast changes masquerade as slow ones</td></tr>
+      <tr><th>jitter</th><td>How much actual sample intervals wobble around the target</td></tr>
+      <tr><th>RTT</th><td>Round-trip time</td></tr>
+      <tr><th>device timestamp</th><td>A time stamped on the device clock at the moment of measurement</td></tr>
+      <tr><th>anchor</th><td>A physical event recorded by all streams at once (clap, chirp, tap), used to verify alignment</td></tr>
+    </tbody>
+  </table>
+  </div>
+</main>
+</body>
+</html>
