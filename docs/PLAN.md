@@ -1,163 +1,167 @@
-# 계획
+# Plan
 
-- **Part 1. 단계별 구현 계획**: e2e를 완성한다.
-- **Part 2. 데이터 기반 개선 계획**: 모니터링으로 데이터 양·크기가 커질 때의 병목을 찾고, 측정 결과에 근거해 개선한다.
+- **Part 1. Staged implementation plan**: complete the e2e pipeline.
+- **Part 2. Data-driven improvement plan**: find bottlenecks that appear as data volume and size grow, using monitoring, and improve based on measurements.
 
-## 원칙
+## Principles
 
-1. **v1을 e2e로 먼저 완성한다.**
-2. **스택 교체는 측정된 병목이 있을 때만 한다.** "더 좋다더라"는 교체 근거가 아니다.
-3. **교체 지점(seam)의 위치는 v1부터 지키고, 인터페이스 세부는 두 번째 구현을 붙일 때 확정한다.** 구현이 하나일 때 만든 추상화는 대개 틀린다.
-4. **비교는 같은 입력으로, 한 번에 한 가지만 바꾼다.** replay 소스와 가짜 기기(synthetic device)를 v1부터 만든다.
-5. **"OGL 현행 스택"은 공개 SDK(syncfield-python, oglo-python) 기준 추정이다.** 내부 시스템(동기화 서비스, OG Center)과는 다를 수 있다.
+1. **Complete v1 end-to-end first.**
+2. **Swap a stack component only when a bottleneck is measured.** "I heard it's better" is not a reason to swap.
+3. **Keep the swap points (seams) in place from v1, but finalize interface details only when a second implementation is attached.** Abstractions built around a single implementation are usually wrong.
+4. **Compare on the same input, changing one thing at a time.** Build a replay source and a synthetic device from v1.
+5. **The "current OGL stack" is inferred from their public SDKs (syncfield-python, oglo-python).** Their internal systems (sync service, OG Center) may differ.
 
-## 교체 지점
+## Swap points
 
-v1 구현 시 아래 경계를 지켜, 병목이 확인되면 해당 지점만 갈아끼울 수 있게 한다.
+Keep the boundaries below while building v1, so that only the affected point needs to be swapped once a bottleneck is confirmed.
 
-| # | 교체 지점 | v1 (OGL 추정) | v2 후보 (이상적) | 경계 인터페이스 |
+| # | Swap point | v1 (inferred OGL) | v2 candidate (ideal) | Boundary interface |
 |---|---|---|---|---|
-| ① | 기기→PC 프로토콜 | 텍스트 (JSON 줄 단위) | 바이너리 (COBS + CRC, protobuf 스키마) | `FrameDecoder` |
-| ② | 장갑 펌웨어 | C++ (Arduino) | Rust (Embassy, esp-hal) | ①의 프로토콜 |
-| ③ | 캡처 코어 | Python | Rust + PyO3 | `Stream` / 세션 Python API |
-| ④ | 저장 포맷 | JSONL + mp4 | MCAP | `EpisodeWriter` / `EpisodeReader` |
-| ⑥ | 처리 오케스트레이션 | 단순 큐 워커 | Ray | `Processor` 실행기 |
+| ① | Device→PC protocol | Text (line-delimited JSON) | Binary (COBS + CRC, protobuf schema) | `FrameDecoder` |
+| ② | Glove firmware | C++ (Arduino) | Rust (Embassy, esp-hal) | Protocol from ① |
+| ③ | Capture core | Python | Rust + PyO3 | `Stream` / session Python API |
+| ④ | Storage format | JSONL + mp4 | MCAP | `EpisodeWriter` / `EpisodeReader` |
+| ⑥ | Processing orchestration | Simple queue worker | Ray | `Processor` runner |
 
-⑤ 동기화 방식(PTP)은 집에서 하드웨어 제약(하드웨어 타임스탬프 지원 NIC, PTP 미지원 웹캠)이 커서 **제외**한다.
-
----
-
-# Part 1. 단계별 구현 계획 (v1 e2e)
-
-스택: Python 3.12, FastAPI, React + Vite, PyAV, sounddevice, pyserial, Postgres, MinIO, ESP32 + Arduino C++
-
-### A0. 개념 (1주)
-- clock domain, monotonic vs wall clock, sampling rate/jitter
-- imitation learning, LeRobot 데이터셋 포맷, egocentric 데이터셋 구조 (Ego4D, HOT3D)
-- SyncField·OGLO SDK 코드 읽기
-- **완료 기준**: 위 개념을 `docs/notes/`에 각자 한 쪽 이내로 정리
-
-### A1. 단일 스트림 캡처 + 측정 기반 (1~2주)
-- 웹캠 녹화, 프레임별 `{frame_number, capture_ns}` jsonl 기록
-- 에피소드 폴더 v1 포맷: `manifest.json`, `{stream}.mp4`, `{stream}.timestamps.jsonl`, `{stream}.jsonl`
-- **가짜 기기**: 정답 타이밍을 아는 신호를 지정한 rate로 생성
-- **replay 소스**: 저장된 에피소드를 원래 타이밍(또는 k배속)으로 다시 흘려보냄
-- **벤치마크 하네스 골격**: 같은 입력으로 지연·jitter·드롭률·CPU·파일 크기 측정
-- **완료 기준**: 에피소드 폴더 1개 생성, 가짜 기기 입력으로 드롭률·jitter 리포트 출력
-
-### A2. DIY 촉각 장갑 (2~3주)
-- ESP32 + FSR 5개 + IMU, ~1kHz 샘플링, 기기 타임스탬프 포함
-- 텍스트 프로토콜로 USB 시리얼 전송, PC 쪽 `FrameDecoder` v1
-- **완료 기준**: 손가락 접촉이 실시간 그래프로 보임, 실제 샘플링 rate와 유실률 측정
-
-### A3. 멀티 스트림 동기화 (2주)
-- 웹캠 + 장갑 + IMU + 오디오를 한 세션으로
-- RTT 기반 clock offset 추정, 시작·끝 offset으로 선형 drift 보정
-- chirp/박수/탭 같은 물리 이벤트 앵커로 cross-correlation 검증
-- **완료 기준**: 탭 테스트 동기화 오차 10ms 이하
-
-### A4. 인제스트 파이프라인 + 모니터링 (2주)
-- 에피소드 업로드 → MinIO, 메타데이터(에피소드, 작업, 수집자, 품질 점수) → Postgres
-- 단순 큐 워커로 후처리 작업 실행
-- LeRobot 포맷(parquet + mp4) 변환
-- Prometheus + Grafana + OpenTelemetry 연결 (구성은 Part 2)
-- **완료 기준**: 업로드한 에피소드가 자동으로 LeRobot 데이터셋까지 변환되고, 단계별 지표가 대시보드에 보임
-
-### A5. 후처리 & 자동 라벨링 (2~3주)
-- 촉각 hysteresis threshold로 `approach → grasp → hold → release` 구간 분할
-- MediaPipe Hands 손 키포인트, SAM 2/3 물체 마스크
-- QA 검사: 프레임 드롭, 동기화 오차, 센서 공백, 보정값 이상 → 품질 점수
-- **완료 기준**: 컵 집기 시연 20회가 사람 개입 없이 라벨링·QA됨
-
-### A6. 시각화 & 리뷰 (1주)
-- Rerun 타임라인 (영상 + 촉각 시계열 + 손 키포인트)
-- 웹 리뷰 툴: 영상 아래 촉각 그래프, 구간 라벨 수정
-- **완료 기준**: 리뷰 툴에서 라벨을 고치면 데이터셋에 반영됨
-
-### A7. 데이터 활용 (선택)
-- vision-to-touch 모델(영상 → 접촉 여부 예측), 장갑 데이터가 정답
-- 저가 로봇팔 + LeRobot 모방 학습
+⑤ Sync method (PTP) is **excluded** due to hardware constraints at home (needs NICs with hardware timestamping; webcams don't support PTP).
 
 ---
 
-# Part 2. 데이터 기반 개선 계획
+# Part 1. Staged implementation plan (v1 e2e)
 
-## 목표
+Stack: Python 3.12, FastAPI, React + Vite, PyAV, sounddevice, pyserial, Postgres, MinIO, ESP32 + Arduino C++
 
-데이터가 커지는 축별로 **어디서 처음 무너지는지(knee point)**를 측정하고, 원인을 찾아 개선한다.
-개선 수단은 설정·구현 수정부터 스택 교체까지 다양하며, **가장 싼 수단부터 시도하고 측정으로 채택 여부를 결정한다.**
+### A0. Concepts (1 week)
+Proceed in order. For each topic: explanation → run labs → answer questions → review.
+Each topic folder `docs/notes/NN-<topic>/` holds the concept explanation (`concept.html`), questions and answers (`summary.md`), and labs (`labs/`).
+1. Time: clock domain, monotonic vs wall clock, sampling rate/jitter
+2. Reading the SyncField code
+3. Reading the OGLO code
+4. Dataset structure: LeRobot format, egocentric datasets (Ego4D, HOT3D)
+5. Imitation learning
+- **Done when**: every question in each topic's `summary.md` is answered and reviewed
 
-## 커지는 축
+### A1. Single-stream capture + measurement foundation (1–2 weeks)
+- Webcam recording with per-frame `{frame_number, capture_ns}` written to jsonl
+- Episode folder v1 format: `manifest.json`, `{stream}.mp4`, `{stream}.timestamps.jsonl`, `{stream}.jsonl`
+- **Synthetic device**: generates a signal with known ground-truth timing at a given rate
+- **Replay source**: re-streams a saved episode at its original timing (or k× speed)
+- **Benchmark harness skeleton**: measures latency, jitter, drop rate, CPU, and file size on the same input
+- **Done when**: one episode folder is produced, and a drop rate/jitter report is printed for synthetic device input
 
-| 축 | 예시 |
+### A2. DIY tactile glove (2–3 weeks)
+- ESP32 + 5 FSRs + IMU, ~1kHz sampling, with device timestamps
+- USB serial transfer over a text protocol, PC-side `FrameDecoder` v1
+- **Done when**: finger contact shows up on a live graph, and the actual sampling rate and loss rate are measured
+
+### A3. Multi-stream synchronization (2 weeks)
+- Webcam + glove + IMU + audio in one session
+- RTT-based clock offset estimation, linear drift correction from start/end offsets
+- Cross-correlation check against physical event anchors (chirp/clap/tap)
+- **Done when**: sync error in the tap test is 10ms or less
+
+### A4. Ingest pipeline + monitoring (2 weeks)
+- Episode upload → MinIO, metadata (episode, task, collector, quality score) → Postgres
+- Post-processing jobs run by a simple queue worker
+- Conversion to LeRobot format (parquet + mp4)
+- Prometheus + Grafana + OpenTelemetry wired in (setup in Part 2)
+- **Done when**: an uploaded episode is automatically converted into a LeRobot dataset, and per-stage metrics show up on the dashboard
+
+### A5. Post-processing & auto-labeling (2–3 weeks)
+- Segment `approach → grasp → hold → release` with a hysteresis threshold on tactile data
+- MediaPipe Hands keypoints, SAM 2/3 object masks
+- QA checks: frame drops, sync error, sensor gaps, calibration anomalies → quality score
+- **Done when**: 20 cup-grasping demonstrations are labeled and QA'd with no human intervention
+
+### A6. Visualization & review (1 week)
+- Rerun timeline (video + tactile time series + hand keypoints)
+- Web review tool: tactile graph under the video, editable segment labels
+- **Done when**: label edits in the review tool are reflected in the dataset
+
+### A7. Using the data (optional)
+- Vision-to-touch model (predict contact from video), with glove data as ground truth
+- Low-cost robot arm + LeRobot imitation learning
+
+---
+
+# Part 2. Data-driven improvement plan
+
+## Goal
+
+For each axis along which data grows, measure **where things first break down (the knee point)**, find the cause, and improve it.
+Improvements range from config and implementation fixes to stack swaps; **try the cheapest option first and decide on adoption by measurement.**
+
+## Growth axes
+
+| Axis | Examples |
 |---|---|
-| 에피소드 내부 부하 | 스트림 수, 샘플링 rate, 영상 해상도·fps |
-| 에피소드 길이 | 30초 → 10분 → 1시간 |
-| 누적량 | 에피소드 10 → 1,000 → 10,000개, 총 용량 GB → TB |
-| 동시성 | 동시 수집 세션·업로드 수 |
+| Load within an episode | Number of streams, sampling rate, video resolution/fps |
+| Episode length | 30 s → 10 min → 1 hour |
+| Accumulated volume | 10 → 1,000 → 10,000 episodes, total size GB → TB |
+| Concurrency | Number of concurrent capture sessions/uploads |
 
-## 모니터링 구성
+## Monitoring setup
 
-- **Prometheus + Grafana** (docker-compose): 모든 계층의 지표 수집·대시보드
-- **OpenTelemetry tracing**: 업로드 → 변환 → 라벨링 → QA 파이프라인의 단계별 소요 시간
-- 캡처 프로세스는 `prometheus_client`로 지표 노출 (녹화 중 실시간 확인)
-- A4에서 붙여 **v1 기준선(baseline)**을 먼저 확보한다
+- **Prometheus + Grafana** (docker-compose): metrics collection and dashboards for every layer
+- **OpenTelemetry tracing**: per-stage duration of the upload → conversion → labeling → QA pipeline
+- The capture process exposes metrics via `prometheus_client` (visible live during recording)
+- Wired in at A4 to secure a **v1 baseline** first
 
-## 계층별 지표
+## Metrics by layer
 
-| 계층 | 지표 |
+| Layer | Metrics |
 |---|---|
-| 기기·전송 | 실제 샘플링 rate, 패킷 유실·손상, 시리얼 버퍼 오버플로, bytes/s |
-| 캡처 | 스트림별 큐 깊이, 쓰기 지연, 프레임 드롭, CPU·메모리, GC 멈춤, 디스크 쓰기 처리량 |
-| 동기화 | 추정 offset·drift, 앵커 기준 잔여 오차의 시간 변화 |
-| 저장 | 스트림별 분당 파일 크기, 쓰기·읽기 처리량, 임의 탐색 시간 |
-| 인제스트·처리 | 업로드 처리량, 큐 적체(lag), 작업 소요 p50/p95, GPU 활용률, 실패·재시도율 |
-| 메타데이터 DB | 쿼리 지연, 행 수, 인덱스 적중 |
-| 학습용 읽기 | dataloader 처리량(samples/s), 영상 디코딩 비용 |
+| Device & transport | Actual sampling rate, packet loss/corruption, serial buffer overflow, bytes/s |
+| Capture | Per-stream queue depth, write latency, frame drops, CPU/memory, GC pauses, disk write throughput |
+| Sync | Estimated offset/drift, residual error against anchors over time |
+| Storage | File size per stream per minute, write/read throughput, random seek time |
+| Ingest & processing | Upload throughput, queue lag, job duration p50/p95, GPU utilization, failure/retry rate |
+| Metadata DB | Query latency, row count, index hits |
+| Training reads | Dataloader throughput (samples/s), video decoding cost |
 
-## 부하 생성
+## Load generation
 
-- **가짜 기기 확장**: 스트림 N개 × rate × 길이를 파라미터로 조절
-- **replay k배속**: 실제 녹화를 빠르게 재생해 같은 패턴으로 부하 증가
-- **대량 에피소드 생성기**: 누적량 축 실험용 (실제 녹화를 복제·변형)
+- **Scaled synthetic device**: number of streams N × rate × duration as parameters
+- **Replay at k× speed**: replay real recordings faster to increase load with realistic patterns
+- **Bulk episode generator**: for accumulated-volume experiments (clone and vary real recordings)
 
-## 절차
+## Procedure
 
-1. **기준선**: 현재 구성으로 기본 부하 측정
-2. **단계적 증가**: 한 축만 늘려가며 지표 기록
-3. **knee point 식별**: 지연·드롭률 등이 급격히 나빠지는 지점
-4. **원인 확정**: 프로파일링(py-spy, 트레이싱)으로 병목이 어느 계층·교체 지점에 있는지 확인
-5. **개선 수단 선택**: 아래 표에서 싼 것부터. 스택 교체는 설정·구현 수정으로 해결되지 않을 때
-6. **같은 입력으로 재측정**: v1/v2를 설정으로 전환해 비교
-7. **결정 기록**: `docs/reports/NN-<시나리오>.md`에 축, knee point, 원인, 시도한 수단, 전후 수치, **채택/기각**과 이유
+1. **Baseline**: measure the default load on the current setup
+2. **Step up**: grow one axis at a time and record metrics
+3. **Find the knee point**: where latency, drop rate, etc. degrade sharply
+4. **Confirm the cause**: use profiling (py-spy, tracing) to locate which layer/swap point the bottleneck is in
+5. **Choose a fix**: cheapest first from the table below; swap the stack only when config/implementation fixes don't solve it
+6. **Re-measure on the same input**: switch between v1/v2 via config and compare
+7. **Record the decision**: in `docs/reports/NN-<scenario>.md`, record the axis, knee point, cause, fixes tried, before/after numbers, and **adopted/rejected** with reasons
 
-기각도 결과다. "바꿔봤는데 차이가 없었다"는 v1을 유지할 근거가 된다.
+Rejection is a result too. "Swapped it and saw no difference" is grounds for keeping v1.
 
-집 규모의 부하에서 병목이 나타나지 않으면, **knee point가 나올 때까지 해당 축의 부하를 계속 키운다.** 학습 목적만으로 스택을 교체하지 않는다. 병목이 생기는 지점과 그 이유를 찾는 것 자체가 결과다.
+If no bottleneck appears at home-scale load, **keep increasing load on that axis until a knee point shows up.** Don't swap a stack component for learning purposes alone. Finding where and why a bottleneck appears is itself the result.
 
-## 예상 병목과 개선 후보 (가설)
+## Expected bottlenecks and candidate fixes (hypotheses)
 
-측정 전 가설이다. 실제 측정 결과로 확인하거나 반박한다.
+These are pre-measurement hypotheses, to be confirmed or refuted by actual measurements.
 
-| 시나리오 | 예상 병목 | 개선 후보 (싼 것 → 비싼 것) |
+| Scenario | Expected bottleneck | Candidate fixes (cheap → expensive) |
 |---|---|---|
-| 스트림 수·rate 증가 | JSON 직렬화, 작은 쓰기 반복, Python GIL | 쓰기 배치 → 바이너리 프로토콜(①) → Rust 코어(③) |
-| 기기 샘플링 불안정 | 펌웨어 루프 지연, 타이머 정밀도 | 인터럽트·타이머 기반 샘플링 → Rust 펌웨어(②) |
-| 에피소드 길이 증가 | 메모리 누적, 단일 거대 파일, 종료 시 일괄 처리 | 스트리밍 쓰기·청크 분할 → MCAP(④) |
-| 해상도·fps 증가 | 영상 인코딩 CPU | 인코딩 preset 조정 → 하드웨어 인코더(macOS VideoToolbox) |
-| 에피소드 수 증가 | 오브젝트 스토리지 small-file 문제, 목록 조회 지연, 메타데이터 쿼리 | 인덱스 추가 → 매니페스트를 DB로 → 파티셔닝·데이터셋 샤딩 |
-| 처리 적체 | 단일 워커, GPU 유휴 | 워커 병렬화 → GPU 배치 추론 → Ray(⑥) |
-| 동시 업로드 | 네트워크·MinIO 처리량, 업로드 실패 | multipart·재개 가능 업로드 → 백프레셔 |
-| 학습용 읽기 | 영상 디코딩, 작은 파일 다수 읽기 | parquet 행 그룹 조정 → 사전 디코딩 캐시 |
+| More streams / higher rate | JSON serialization, repeated small writes, Python GIL | Write batching → binary protocol (①) → Rust core (③) |
+| Unstable device sampling | Firmware loop latency, timer precision | Interrupt/timer-based sampling → Rust firmware (②) |
+| Longer episodes | Memory buildup, single huge files, batch processing at stop | Streaming writes / chunking → MCAP (④) |
+| Higher resolution / fps | Video encoding CPU | Encoding preset tuning → hardware encoder (macOS VideoToolbox) |
+| More episodes | Object storage small-file problem, slow listing, metadata queries | Add indexes → manifests in DB → partitioning / dataset sharding |
+| Processing backlog | Single worker, idle GPU | Parallel workers → GPU batch inference → Ray (⑥) |
+| Concurrent uploads | Network/MinIO throughput, upload failures | Multipart / resumable uploads → backpressure |
+| Training reads | Video decoding, many small file reads | Tune parquet row groups → pre-decoded cache |
 
-## 스택 교체 시 비교 지표
+## Comparison metrics for stack swaps
 
-병목이 교체 지점에 있다고 확인된 경우에만 해당 교체를 진행하고, 아래 지표로 비교한다.
+Proceed with a swap only when the bottleneck is confirmed to be at that swap point, and compare with the metrics below.
 
-| 교체 | 비교 지표 |
+| Swap | Comparison metrics |
 |---|---|
-| ① 텍스트 → 바이너리 | 대역폭, 디코딩 CPU, 최대 안정 샘플링 rate, 손상 패킷 감지율 |
-| ② C++ → Rust 펌웨어 | 샘플링 jitter, 기기 타임스탬프 정확도, 바이너리 크기 |
-| ③ Python → Rust 코어 | 스트림 수 증가 시 지연·jitter·드롭률, CPU, 꼬리 지연(p99) |
-| ④ JSONL → MCAP | 파일 크기, 쓰기 처리량, 읽기·임의 탐색 속도, 손상 복구 |
-| ⑥ 단순 워커 → Ray | 에피소드 N개 처리 시간, GPU 활용률, 실패 재시도 |
+| ① Text → binary | Bandwidth, decoding CPU, max stable sampling rate, corrupted packet detection rate |
+| ② C++ → Rust firmware | Sampling jitter, device timestamp accuracy, binary size |
+| ③ Python → Rust core | Latency/jitter/drop rate as stream count grows, CPU, tail latency (p99) |
+| ④ JSONL → MCAP | File size, write throughput, read/random seek speed, corruption recovery |
+| ⑥ Simple worker → Ray | Time to process N episodes, GPU utilization, failure retries |
