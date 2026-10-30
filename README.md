@@ -13,6 +13,15 @@ A cottage-industry-scale take on the data engine of [OpenGraph Labs](https://ope
 
 Stages and the improvement process are in [docs/PLAN.md](docs/PLAN.md); measurement and comparison results go in `docs/reports/`.
 
+## Setup
+
+Requires [uv](https://docs.astral.sh/uv/). It installs Python 3.12 and the dependencies into `.venv`.
+
+```bash
+uv sync
+uv run docs/notes/01-time/labs/1_clocks.py
+```
+
 ## References
 
 - [OpenGraph Labs](https://opengraphlabs.com/)
