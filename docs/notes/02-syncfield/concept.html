@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>02 · SyncField</title>
+<style>
+  :root {
+    --bg: #fbfaf7;
+    --surface: #ffffff;
+    --text: #1f1f1d;
+    --muted: #6b6a65;
+    --border: #e4e1d9;
+    --accent: #c2410c;
+    --accent-2: #2563eb;
+    --code-bg: #f3f1ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161614;
+      --surface: #1f1f1c;
+      --text: #ecebe6;
+      --muted: #a09e96;
+      --border: #34332f;
+      --accent: #fb923c;
+      --accent-2: #60a5fa;
+      --code-bg: #2a2925;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161614;
+    --surface: #1f1f1c;
+    --text: #ecebe6;
+    --muted: #a09e96;
+    --border: #34332f;
+    --accent: #fb923c;
+    --accent-2: #60a5fa;
+    --code-bg: #2a2925;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 16px 96px; }
+  h1 { font-size: 2rem; margin: 0 0 4px; }
+  .lede { color: var(--muted); margin: 0 0 40px; }
+  h2 { font-size: 1.3rem; margin: 56px 0 12px; padding-top: 16px; border-top: 1px solid var(--border); }
+  h2 .num { color: var(--accent); margin-right: 8px; }
+  h3 { font-size: 1.05rem; margin: 28px 0 8px; }
+  p, li { color: var(--text); }
+  code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; font-size: 0.9em; }
+  pre { background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.9em; line-height: 1.5; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.94em; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .table-wrap { overflow-x: auto; }
+  .callout { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; padding: 12px 16px; margin: 16px 0; }
+  .callout p { margin: 0; }
+  figure { margin: 20px 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  figure svg { width: 100%; height: auto; display: block; color: var(--text); }
+  figcaption { color: var(--muted); font-size: 0.88em; margin-top: 8px; }
+  .muted { color: var(--muted); }
+  nav ol { padding-left: 20px; margin: 0; }
+  nav a { color: var(--text); }
+</style>
+</head>
+<body>
+<main>
+  <h1>02 · SyncField</h1>
+  <p class="lede">How a production capture SDK puts 01-time into practice, and what to borrow for our own v1. Based on syncfield-python 0.8.14.</p>
+
+  <nav>
+    <ol>
+      <li><a href="#what">What SyncField does, and what isn't public</a></li>
+      <li><a href="#format">The episode directory and its time fields</a></li>
+      <li><a href="#lifecycle">The Stream interface and the session lifecycle</a></li>
+      <li><a href="#stamp">Where timestamps are taken</a></li>
+      <li><a href="#writer">Writers and crash safety</a></li>
+      <li><a href="#chirp">The chirp anchor</a></li>
+      <li><a href="#borrow">What we borrow, and what we change</a></li>
+      <li><a href="#terms">Glossary</a></li>
+    </ol>
+  </nav>
+
+  <h2 id="what"><span class="num">1</span>What SyncField does, and what isn't public</h2>
+  <p>SyncField is split into two parts with a clear line between them.</p>
+  <figure>
+    <svg viewBox="0 0 640 170" role="img" aria-label="Devices feed the SDK, which writes an episode directory, which the sync service aligns">
+      <rect x="10" y="50" width="120" height="70" rx="8" fill="none" stroke="currentColor" stroke-opacity="0.5"/>
+      <text x="70" y="80" text-anchor="middle" font-size="13" fill="currentColor">cameras, glove,</text>
+      <text x="70" y="98" text-anchor="middle" font-size="13" fill="currentColor">IMU, mic</text>
+      <rect x="170" y="50" width="130" height="70" rx="8" fill="none" stroke="var(--accent-2)" stroke-width="2"/>
+      <text x="235" y="80" text-anchor="middle" font-size="13" fill="var(--accent-2)">SDK (public)</text>
+      <text x="235" y="98" text-anchor="middle" font-size="12" fill="currentColor" fill-opacity="0.7">record + timestamp</text>
+      <rect x="340" y="50" width="130" height="70" rx="8" fill="none" stroke="currentColor" stroke-opacity="0.5"/>
+      <text x="405" y="80" text-anchor="middle" font-size="13" fill="currentColor">episode dir</text>
+      <text x="405" y="98" text-anchor="middle" font-size="12" fill="currentColor" fill-opacity="0.7">files on disk</text>
+      <rect x="510" y="50" width="120" height="70" rx="8" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="5 4"/>
+      <text x="570" y="80" text-anchor="middle" font-size="13" fill="var(--accent)">sync service</text>
+      <text x="570" y="98" text-anchor="middle" font-size="12" fill="currentColor" fill-opacity="0.7">align (not public)</text>
+      <line x1="130" y1="85" x2="166" y2="85" stroke="currentColor" stroke-opacity="0.6" marker-end="url(#a)"/>
+      <line x1="300" y1="85" x2="336" y2="85" stroke="currentColor" stroke-opacity="0.6" marker-end="url(#a)"/>
+      <line x1="470" y1="85" x2="506" y2="85" stroke="currentColor" stroke-opacity="0.6" marker-end="url(#a)"/>
+      <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="currentColor" fill-opacity="0.6"/></marker></defs>
+    </svg>
+    <figcaption>The SDK records evidence; the sync service decides the alignment.</figcaption>
+  </figure>
+  <ul>
+    <li><b>The SDK (syncfield-python, Apache-2.0):</b> drives every device through one recording lifecycle, timestamps every sample, plays the chirps, and writes an episode directory. That's all of it: there is no alignment math in the SDK.</li>
+    <li><b>The sync service:</b> takes the episode directory and aligns the streams "to sub-frame precision" (README). It is not in any public repository. The SDK only refers to it: the docs list a "Sync service REST API", and code comments mention "the syncfield sync API" and "the SyncField Docker container". So it is shipped as a hosted API and/or a container image, with closed source.</li>
+  </ul>
+  <div class="callout"><p>The SDK's job is to <b>record the raw evidence faithfully</b> (every timestamp, which clock it came from, how uncertain it is, and shared anchors). Correcting it is left to a later stage that sees the whole episode. A3 in our plan is where we build that later stage ourselves.</p></div>
+
+  <h2 id="format"><span class="num">2</span>The episode directory and its time fields</h2>
+  <p>One recording produces one directory, <code>ep_&lt;date&gt;_&lt;time&gt;_&lt;id&gt;/</code>:</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>File</th><th>Written</th><th>Contents</th></tr></thead>
+    <tbody>
+      <tr><td><code>sync_point.json</code></td><td>at start, updated with chirp times</td><td>The session's time anchor: <code>monotonic_ns</code> and <code>wall_clock_ns</code> taken at the same moment, plus chirp times and their source</td></tr>
+      <tr><td><code>{stream}.timestamps.jsonl</code></td><td>one line per frame</td><td>Video/audio/custom streams: timestamps only (the media itself goes to <code>{stream}.mp4</code> / <code>.wav</code>)</td></tr>
+      <tr><td><code>{stream}.jsonl</code></td><td>one line per sample</td><td>Sensor streams: timestamp and channel values in one row</td></tr>
+      <tr><td><code>session_log.jsonl</code></td><td>on every state change</td><td>State transitions (countdown → recording → stopping), health events</td></tr>
+      <tr><td><code>manifest.json</code></td><td>at stop</td><td>Per-stream kind, capabilities, status, frame count, recording anchor</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>One row, several kinds of time</h3>
+  <pre><code>{"frame_number":1, "capture_ns":1056298556080791, "clock_source":"host_monotonic",
+ "clock_domain":"lab_host", "uncertainty_ns":5000000,
+ "channels":{"value":0.041}, "device_timestamp_ns":1056298679255216}</code></pre>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Field</th><th>Meaning</th><th>01-time concept</th></tr></thead>
+    <tbody>
+      <tr><td><code>capture_ns</code></td><td><code>time.monotonic_ns()</code> taken when the data <b>arrived on the host</b></td><td>Host-arrival timestamp; monotonic clock</td></tr>
+      <tr><td><code>clock_domain</code></td><td>The host ID. Identical for every host-clocked stream on the same machine</td><td>Clock domain</td></tr>
+      <tr><td><code>uncertainty_ns</code></td><td>How far this timestamp may be off. Default 5 ms</td><td>Error budget</td></tr>
+      <tr><td><code>device_timestamp_ns</code></td><td>Optional. The device's own clock reading, kept <b>separate</b> from <code>capture_ns</code></td><td>Device timestamp; a second clock domain</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Every stream on one host is stamped with the same host monotonic clock, so they share one clock domain and need no offset or drift correction between them. This is the 01-time principle of minimizing clock domains. A device clock, when there is one, is recorded alongside instead of replacing <code>capture_ns</code>: the docstring says it is kept separate "so host-arrival quality checks keep their original semantics".</p>
+  <p><code>sync_point.json</code> pairs <code>monotonic_ns</code> with <code>wall_clock_ns</code> read at the same moment. Within a host, everything uses monotonic. The wall-clock value only places the session in real-world time, so that hosts and humans can roughly line it up.</p>
+
+  <h2 id="lifecycle"><span class="num">3</span>The Stream interface and the session lifecycle</h2>
+  <p>Every device is wrapped in a <b>Stream</b> adapter with the same five methods (<code>stream.py</code>):</p>
+  <pre><code>prepare() → connect() → start_recording(clock) → stop_recording() → disconnect()
+ (once)     (preview)     (start writing)          (stop writing)     (close device)</code></pre>
+  <ul>
+    <li><b><code>connect()</code></b> opens the device and starts capturing for live preview, but <b>must not write to disk</b>. Anything slow (opening the camera, warming up) belongs here.</li>
+    <li><b><code>start_recording()</code></b> "must be fast and atomic": it just flips a flag so the capture loop starts writing.</li>
+  </ul>
+  <p>The <b>SessionOrchestrator</b> drives every stream through one state machine:</p>
+  <pre><code>IDLE → CONNECTED → PREPARING → COUNTDOWN → RECORDING → STOPPING → CONNECTED …</code></pre>
+  <p>Inside <code>start()</code> (<code>orchestrator.py</code>), the order is deliberate:</p>
+  <ol>
+    <li>Take a fresh <code>SyncPoint</code> and open one writer per stream, <b>before</b> any stream starts, so the very first sample has somewhere to go.</li>
+    <li>Read <code>armed_ns = time.monotonic_ns()</code> once and give the <b>same value</b> to every stream.</li>
+    <li>Call <code>start_recording()</code> on all streams <b>in parallel</b>, one thread each, so a slow adapter can't delay the others.</li>
+    <li>If any stream fails, roll back the ones that started and re-raise.</li>
+    <li>Only then play the start chirp, "so the audio track actually captures it".</li>
+  </ol>
+  <p>Each stream records a <b>recording anchor</b> in the manifest: <code>armed_host_ns</code> (shared) and the host time of its own first frame. The difference, <code>first_frame_latency_ns</code>, is that adapter's observed start-up latency. The docstring says downstream tooling uses it "to remove per-adapter bias when aligning streams".</p>
+
+  <h2 id="stamp"><span class="num">4</span>Where timestamps are taken</h2>
+  <p>01-time section 7 asked where to stamp. Here is where SyncField does it, per adapter:</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Adapter</th><th><code>capture_ns</code> taken</th><th>Device clock</th></tr></thead>
+    <tbody>
+      <tr><td>Webcam (<code>uvc_webcam.py</code>)</td><td>Right after a decoded frame comes out of PyAV, before any further processing</td><td>None. Includes USB transfer and decode latency</td></tr>
+      <tr><td>Polling sensor (<code>polling_sensor.py</code>)</td><td>Right after the user's <code>read()</code> returns</td><td>Optional: <code>read()</code> may return <code>(channels, device_ns)</code></td></tr>
+      <tr><td>Host microphone (<code>host_audio.py</code>)</td><td>When the audio callback delivers a block</td><td>None per sample</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>All three stamp on <b>host arrival</b>. That's simple and puts everything in one clock domain, at the cost of the arrival-latency jitter discussed in 01-time. The device clock is an optional extra.</p>
+
+  <h3>The polling loop</h3>
+  <p>A <code>PollingSensorStream</code> runs its own fixed-rate loop on a thread:</p>
+  <pre><code>def _capture_once(self):
+    loop_start = time.monotonic()
+    result = self._read()                # call the device
+    ...
+    capture_ns = time.monotonic_ns()     # stamp on arrival
+    ...                                  # emit the sample
+    elapsed = time.monotonic() - loop_start
+    time.sleep(max(0.0, self._period - elapsed))</code></pre>
+  <p>Compare this with the two loops in 01-time lab 2. Lab 1 and lab 3 here measure how well it holds the target rate.</p>
+
+  <h2 id="writer"><span class="num">5</span>Writers and crash safety</h2>
+  <p>The orchestrator gives each stream a writer by kind (<code>writer.py</code>):</p>
+  <ul>
+    <li><b><code>StreamWriter</code></b> (video/audio/custom → <code>.timestamps.jsonl</code>): writes one JSON line per frame and calls <code>flush()</code> after every line.</li>
+    <li><b><code>SensorWriter</code></b> (sensor → <code>.jsonl</code>): the same by default. High-rate adapters can opt into a queue so JSON encoding and batched flushes run on a separate writer thread, "so a slow filesystem can't apply back-pressure to a hardware receive loop".</li>
+    <li><b><code>SessionLogWriter</code></b>: flushes on every event, "so the log survives a process crash mid-recording".</li>
+  </ul>
+  <p>JSON Lines is a good fit for this: every line is a complete record, so a crash loses at most the last partial line, and the file can still be read up to that point.</p>
+  <div class="callout"><p><code>flush()</code> hands the data from Python's buffer to the OS, which survives the <b>process</b> crashing. It is not <code>fsync()</code>: if the OS crashes or the power goes out, data still in the OS's page cache can be lost.</p></div>
+  <p><code>manifest.json</code> is only written at <code>stop()</code>. A crashed recording has timestamps and a session log but no manifest.</p>
+
+  <h2 id="chirp"><span class="num">6</span>The chirp anchor</h2>
+  <p>01-time's glossary defined an anchor as a physical event recorded by all streams at once. SyncField's anchor is a sound (<code>tone.py</code>):</p>
+  <ul>
+    <li>A <b>chirp</b> is a linear frequency sweep: the default start chirp rises from 17 kHz to 19 kHz over 500 ms; the stop chirp falls back. 17–19 kHz is nearly inaudible to adults but survives a laptop speaker, microphones, and AAC encoding. An audible 400–2500 Hz preset also exists.</li>
+    <li>A sweep is used rather than a plain beep because its cross-correlation has a <b>single sharp peak</b>: slide the known chirp along a recorded audio track and the match is strong at exactly one offset. The comment claims sub-millisecond anchoring.</li>
+    <li>The chirp plays after every stream is writing, so every microphone in the room (on this host and on other hosts) records it.</li>
+  </ul>
+
+  <h3>When did the chirp actually play?</h3>
+  <p>Calling "play" is not the moment sound leaves the speaker. The audio driver buffers samples first. So the player asks PortAudio for the DAC time, which tells it when the first sample will actually leave the digital-to-analog converter:</p>
+  <pre><code>hardware_ns = monotonic_at_callback + (outputBufferDacTime − currentTime) × 1e9</code></pre>
+  <p>The result is tagged with its <b>source</b>, so a later stage knows how much to trust it:</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th><code>chirp_start_source</code></th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>hardware</code></td><td>From the driver's DAC time. The best SyncField can do</td></tr>
+      <tr><td><code>software_fallback</code></td><td>The driver gave no DAC time, so it uses the time just before the play call (~1 ms jitter)</td></tr>
+      <tr><td><code>silent</code></td><td>No sound was played (lab 1). This host can't serve as an acoustic reference</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>With <code>chirp_start_ns</code> (when the chirp left this host's speaker, in host monotonic time) and an audio track that recorded it, an aligner can find the chirp's position in each track and line the tracks up. This is the same idea as the 01-time error budget: record the value, record where it came from, and let the later stage decide how much precision to claim.</p>
+
+  <h2 id="borrow"><span class="num">7</span>What we borrow, and what we change</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>SyncField</th><th>For our v1</th></tr></thead>
+    <tbody>
+      <tr><td>One host clock domain; host-arrival <code>capture_ns</code> plus optional <code>device_timestamp_ns</code> and <code>uncertainty_ns</code></td><td>Same row schema in A1, so our episodes stay comparable with SyncField's format</td></tr>
+      <tr><td><code>connect()</code> / <code>start_recording()</code> split, parallel fan-out, shared <code>armed_ns</code></td><td>The shape of our <code>Stream</code> interface (swap point ③)</td></tr>
+      <tr><td>One writer per stream kind, line-flushed JSONL</td><td>The v1 of our <code>EpisodeWriter</code> (swap point ④); MCAP is the v2 candidate</td></tr>
+      <tr><td>Chirp anchor with a source tag</td><td>The anchor for A3's cross-correlation check</td></tr>
+      <tr><td>Polling loop with relative sleep</td><td>Measure it first (lab 1, lab 3); 01-time lab 2 suggests an absolute-deadline loop</td></tr>
+      <tr><td>Glove stamped on host arrival unless the adapter supplies a device clock</td><td>A2: stamp on the ESP32 and send the device time with every sample</td></tr>
+      <tr><td>Alignment done by a closed service</td><td>A3: build offset/drift estimation and anchor checks ourselves</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="terms"><span class="num">8</span>Glossary</h2>
+  <div class="table-wrap">
+  <table>
+    <tbody>
+      <tr><th>episode</th><td>One recording: one directory with every stream's files and the session metadata</td></tr>
+      <tr><th>Stream (adapter)</th><td>A wrapper that gives one device the common five-method lifecycle</td></tr>
+      <tr><th>SessionOrchestrator</th><td>Drives all streams through one state machine and owns the writers</td></tr>
+      <tr><th>sync point</th><td>A monotonic and a wall-clock reading taken at the same moment at session start</td></tr>
+      <tr><th>recording anchor</th><td>A shared arm time plus each stream's first-frame time, used to estimate per-adapter start-up latency</td></tr>
+      <tr><th>JSON Lines (JSONL)</th><td>One complete JSON object per line; append-friendly and robust to a crash mid-file</td></tr>
+      <tr><th>flush vs fsync</th><td>flush hands data to the OS (survives a process crash); fsync forces it to disk (survives an OS crash or power loss)</td></tr>
+      <tr><th>chirp</th><td>A frequency sweep whose cross-correlation has a single sharp peak, used as an acoustic anchor</td></tr>
+      <tr><th>cross-correlation</th><td>Sliding a known signal along a recording and measuring the match at each offset; the peak gives the offset</td></tr>
+      <tr><th>DAC time</th><td>When the audio hardware will actually output a sample, as reported by the driver</td></tr>
+    </tbody>
+  </table>
+  </div>
+</main>
+</body>
+</html>
