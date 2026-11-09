@@ -60,6 +60,9 @@
   .table-wrap { overflow-x: auto; }
   .callout { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; padding: 12px 16px; margin: 16px 0; }
   .callout p { margin: 0; }
+  .callout.sf { border-left-color: var(--accent-2); }
+  .callout.sf .sf-label { color: var(--accent-2); font-weight: 600; font-size: 0.92em; }
+  .callout.sf ul { margin: 6px 0 0; padding-left: 20px; }
   figure { margin: 20px 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
   figure svg { width: 100%; height: auto; display: block; color: var(--text); }
   figcaption { color: var(--muted); font-size: 0.88em; margin-top: 8px; }
@@ -116,21 +119,25 @@
   <div class="callout"><p>The SDK's job is to <b>record the raw evidence faithfully</b> (every timestamp, which clock it came from, how uncertain it is, and shared anchors). Correcting it is left to a later stage that sees the whole episode. A3 in our plan is where we build that later stage ourselves.</p></div>
 
   <h2 id="format"><span class="num">2</span>The episode directory and its time fields</h2>
-  <p>One recording produces one directory, <code>ep_&lt;date&gt;_&lt;time&gt;_&lt;id&gt;/</code>:</p>
+  <p>One press of Record followed by Stop is one <b>episode</b>. Each episode becomes one directory on disk, named <code>ep_&lt;date&gt;_&lt;time&gt;_&lt;id&gt;/</code>. Lab 1 creates one under <code>labs/output/1_fake_sensor/</code> (lab 2 under <code>labs/output/2_webcam_mic/</code>), so you can open the files as you read.</p>
+  <p>The directory holds two kinds of files: one file per device (stream), with a row for every sample that device delivered, and a few files for the whole episode.</p>
   <div class="table-wrap">
   <table>
-    <thead><tr><th>File</th><th>Written</th><th>Contents</th></tr></thead>
+    <thead><tr><th>File</th><th>How many</th><th>What's in it</th></tr></thead>
     <tbody>
-      <tr><td><code>sync_point.json</code></td><td>at start, updated with chirp times</td><td>The session's time anchor: <code>monotonic_ns</code> and <code>wall_clock_ns</code> taken at the same moment, plus chirp times and their source</td></tr>
-      <tr><td><code>{stream}.timestamps.jsonl</code></td><td>one line per frame</td><td>Video/audio/custom streams: timestamps only (the media itself goes to <code>{stream}.mp4</code> / <code>.wav</code>)</td></tr>
-      <tr><td><code>{stream}.jsonl</code></td><td>one line per sample</td><td>Sensor streams: timestamp and channel values in one row</td></tr>
-      <tr><td><code>session_log.jsonl</code></td><td>on every state change</td><td>State transitions (countdown → recording → stopping), health events</td></tr>
-      <tr><td><code>manifest.json</code></td><td>at stop</td><td>Per-stream kind, capabilities, status, frame count, recording anchor</td></tr>
+      <tr><td><code>{stream}.jsonl</code></td><td>one per sensor stream</td><td>One row per sample: its timestamps and its values (lab 1's <code>fake_glove.jsonl</code>)</td></tr>
+      <tr><td><code>{stream}.timestamps.jsonl</code></td><td>one per video or audio stream</td><td>One row per frame or audio block, timestamps only. The pictures and sound themselves are in <code>{stream}.mp4</code> / <code>.wav</code>, which are too big to put in rows</td></tr>
+      <tr><td><code>sync_point.json</code></td><td>one per episode</td><td>The clock readings taken when the episode started, and later the times of the start and stop sounds (the chirps, section 6)</td></tr>
+      <tr><td><code>session_log.jsonl</code></td><td>one per episode</td><td>What happened during the session, one event per line: state changes (countdown, recording, stopping; section 3) and problems a device reported, such as a camera that stopped delivering frames</td></tr>
+      <tr><td><code>incidents.jsonl</code></td><td>one per episode</td><td>The same device reports grouped into <b>incidents</b>: many similar events (say, a camera's frame rate dropping, again and again) become one incident with a start, a count and an end, like an alert grouped into one outage in server monitoring. A line is written when an incident opens and again when it closes, so even a clean run has one: lab 1's "connected" event, at <code>info</code> level. SyncField's detectors for these (frame-rate drops, jitter, stalls, back-pressure) are left for A1, where we design our own monitoring</td></tr>
+      <tr><td><code>manifest.json</code></td><td>one per episode, written at Stop</td><td>A summary per stream: its kind (video, audio, sensor), what it declared it can do (for a sensor, its target rate), whether it finished cleanly, how many samples it wrote, and its start-up timing (section 3)</td></tr>
     </tbody>
   </table>
   </div>
+  <p>Only the episode files refer to later sections. The per-stream rows are what everything else builds on, so the rest of this section looks at one of them.</p>
 
   <h3>One row, several kinds of time</h3>
+  <p>A row from lab 1's <code>fake_glove.jsonl</code> (one line per sample, reformatted here):</p>
   <pre><code>{"frame_number":1, "capture_ns":1056298556080791, "clock_source":"host_monotonic",
  "clock_domain":"lab_host", "uncertainty_ns":5000000,
  "channels":{"value":0.041}, "device_timestamp_ns":1056298679255216}</code></pre>
@@ -138,96 +145,226 @@
   <table>
     <thead><tr><th>Field</th><th>Meaning</th><th>01-time concept</th></tr></thead>
     <tbody>
-      <tr><td><code>capture_ns</code></td><td><code>time.monotonic_ns()</code> taken when the data <b>arrived on the host</b></td><td>Host-arrival timestamp; monotonic clock</td></tr>
-      <tr><td><code>clock_domain</code></td><td>The host ID. Identical for every host-clocked stream on the same machine</td><td>Clock domain</td></tr>
-      <tr><td><code>uncertainty_ns</code></td><td>How far this timestamp may be off. Default 5 ms</td><td>Error budget</td></tr>
-      <tr><td><code>device_timestamp_ns</code></td><td>Optional. The device's own clock reading, kept <b>separate</b> from <code>capture_ns</code></td><td>Device timestamp; a second clock domain</td></tr>
+      <tr><td><code>frame_number</code></td><td>The sample's position in this stream, counting from 0</td><td></td></tr>
+      <tr><td><code>capture_ns</code></td><td>The host's <code>time.monotonic_ns()</code>, read when the sample <b>arrived on the host</b> (where exactly, per device: section 4)</td><td>Host-arrival timestamp; monotonic clock</td></tr>
+      <tr><td><code>clock_source</code></td><td>Which clock <code>capture_ns</code> was read from. Always <code>host_monotonic</code> in the SDK</td><td>Monotonic clock</td></tr>
+      <tr><td><code>clock_domain</code></td><td>The host's name (<code>host_id</code>, set in the lab script). Every stream on the same machine has the same value</td><td>Clock domain</td></tr>
+      <tr><td><code>uncertainty_ns</code></td><td>How far this timestamp may be off. 5 ms unless the adapter sets something else. It's a fixed default, not measured: lab 1's fake glove just keeps it, while SyncField's adapters for OGL's own devices write 0.5 ms</td><td>Error budget</td></tr>
+      <tr><td><code>channels</code></td><td>The sample's values. Sensor rows only</td><td></td></tr>
+      <tr><td><code>device_timestamp_ns</code></td><td>Optional. The device's own clock reading for this sample, if the device has one. Lab 1's fake device returns one</td><td>Device timestamp; a second clock domain</td></tr>
     </tbody>
   </table>
   </div>
-  <p>Every stream on one host is stamped with the same host monotonic clock, so they share one clock domain and need no offset or drift correction between them. This is the 01-time principle of minimizing clock domains. A device clock, when there is one, is recorded alongside instead of replacing <code>capture_ns</code>: the docstring says it is kept separate "so host-arrival quality checks keep their original semantics".</p>
-  <p><code>sync_point.json</code> pairs <code>monotonic_ns</code> with <code>wall_clock_ns</code> read at the same moment. Within a host, everything uses monotonic. The wall-clock value only places the session in real-world time, so that hosts and humans can roughly line it up.</p>
+  <p>Every stream on one host stamps <code>capture_ns</code> from the same host monotonic clock, so all of them share one clock domain. Two streams' <code>capture_ns</code> values can be compared directly, with no offset or drift to correct between them. This is the 01-time principle of keeping the number of clock domains small.</p>
+  <p>A device clock, when there is one, goes in its own field next to <code>capture_ns</code> instead of replacing it. SyncField's docstring explains this as keeping "host-arrival quality checks" meaningful: checks that only look at <code>capture_ns</code>, such as the rate and interval statistics lab 3 computes. Summary question 1 asks you to work out why that matters.</p>
+  <p><code>sync_point.json</code> holds two clock readings taken at the same moment when the episode starts: <code>monotonic_ns</code> and <code>wall_clock_ns</code>. Inside a host everything uses monotonic time, because it never jumps (01-time section 4). But a monotonic reading alone doesn't say what date it was. The wall-clock reading taken alongside it places the episode in real-world time, so that people, and other hosts, can tell roughly when it was recorded.</p>
 
   <h2 id="lifecycle"><span class="num">3</span>The Stream interface and the session lifecycle</h2>
-  <p>Every device is wrapped in a <b>Stream</b> adapter with the same five methods (<code>stream.py</code>):</p>
-  <pre><code>prepare() → connect() → start_recording(clock) → stop_recording() → disconnect()
- (once)     (preview)     (start writing)          (stop writing)     (close device)</code></pre>
+  <p>A rig mixes devices that are opened and read in completely different ways. A webcam goes through the OS camera system, a microphone through the audio system, and a glove through Bluetooth or a serial port. The part that runs a recording shouldn't need to know any of that.</p>
+  <p>The usual answer is an interface, as in Java or Go: define a few methods every device must offer, and write one wrapper per device that implements them. SyncField calls the interface a <b>Stream</b> and each wrapper an <b>adapter</b>. The part that runs the recording, the <b>SessionOrchestrator</b>, only ever calls the interface methods.</p>
+
+  <h3>Why the lifecycle has separate steps</h3>
+  <p>Opening a device is slow and unpredictable: a webcam can take a second or more before the first frame. If every device were opened only when the user pressed Record, each stream would begin at a different moment, and the first second of the episode would be missing data from some of them.</p>
+  <p>So the slow part and the fast part are separate steps:</p>
   <ul>
-    <li><b><code>connect()</code></b> opens the device and starts capturing for live preview, but <b>must not write to disk</b>. Anything slow (opening the camera, warming up) belongs here.</li>
-    <li><b><code>start_recording()</code></b> "must be fast and atomic": it just flips a flag so the capture loop starts writing.</li>
+    <li><b>Before Record:</b> open every device and let data flow, but only to a live preview on screen. Nothing is written to disk yet.</li>
+    <li><b>At Record:</b> on every stream, just flip a switch from "preview only" to "preview and write". Flipping a switch takes microseconds, so all streams start writing at nearly the same instant.</li>
+    <li><b>At Stop:</b> flip the switch back. The device stays open, so the next recording can start without reopening anything.</li>
   </ul>
-  <p>The <b>SessionOrchestrator</b> drives every stream through one state machine:</p>
-  <pre><code>IDLE → CONNECTED → PREPARING → COUNTDOWN → RECORDING → STOPPING → CONNECTED …</code></pre>
-  <p>Inside <code>start()</code> (<code>orchestrator.py</code>), the order is deliberate:</p>
+
+  <div class="callout sf">
+    <p class="sf-label">In SyncField (<code>stream.py</code>)</p>
+    <p>The interface's five lifecycle methods:</p>
+    <pre><code>prepare() → connect() → start_recording(session_clock) → stop_recording() → disconnect()</code></pre>
+    <ul>
+      <li><code>prepare()</code>: one-time setup, such as checking permissions or getting a handle to the device.</li>
+      <li><code>connect()</code>: open the device and start preview. The docs say it "must not write to disk"; anything slow belongs here.</li>
+      <li><code>start_recording(session_clock)</code>: the switch. The docs say it "must be fast and atomic". <code>session_clock</code> carries the episode's start readings and one shared start time, <code>recording_armed_ns</code>, explained below.</li>
+      <li><code>stop_recording()</code>: switch back and report how the stream finished. <code>disconnect()</code>: close the device.</li>
+    </ul>
+  </div>
+
+  <h3>The session's states</h3>
+  <p>The orchestrator tracks where the whole session is in one state value:</p>
+  <pre><code>IDLE → CONNECTED → PREPARING → COUNTDOWN → RECORDING → STOPPING → CONNECTED …
+(nothing  (devices    (Record      (3, 2, 1   (writing)   (finishing
+ open)     open,       pressed;     on screen)              files)
+           preview)    getting
+                       ready)</code></pre>
+  <p>After a recording, the session goes back to CONNECTED with the devices still open, ready for the next episode.</p>
+
+  <h3>What happens when recording starts</h3>
+  <p>Right after the countdown, the orchestrator starts every stream in a deliberate order:</p>
   <ol>
-    <li>Take a fresh <code>SyncPoint</code> and open one writer per stream, <b>before</b> any stream starts, so the very first sample has somewhere to go.</li>
-    <li>Read <code>armed_ns = time.monotonic_ns()</code> once and give the <b>same value</b> to every stream.</li>
-    <li>Call <code>start_recording()</code> on all streams <b>in parallel</b>, one thread each, so a slow adapter can't delay the others.</li>
-    <li>If any stream fails, roll back the ones that started and re-raise.</li>
-    <li>Only then play the start chirp, "so the audio track actually captures it".</li>
+    <li><b>Read the start clocks and get the files ready.</b> It reads the two start readings for <code>sync_point.json</code> (section 2) and creates every stream's row file, <b>before</b> any stream starts. That way the very first sample already has a file to go to. Who writes the rows is section 5.</li>
+    <li><b>Read one start time and give it to everyone.</b> It reads the host clock once and gives that same value to every stream. Each stream then knows exactly when "start" was, as one shared value rather than one per stream.</li>
+    <li><b>Flip every stream's switch at the same time.</b> It does this on one thread per stream, so a slow adapter can't delay the others.</li>
+    <li><b>Undo everything if one stream fails.</b> If any stream fails to start, it stops the ones that did and reports the error. An episode is either recorded by every stream or not at all.</li>
+    <li><b>Play the start sound.</b> Only once every stream is recording (section 6), so that the recordings actually contain it.</li>
   </ol>
-  <p>Each stream records a <b>recording anchor</b> in the manifest: <code>armed_host_ns</code> (shared) and the host time of its own first frame. The difference, <code>first_frame_latency_ns</code>, is that adapter's observed start-up latency. The docstring says downstream tooling uses it "to remove per-adapter bias when aligning streams".</p>
+  <p>Step 2 gives each stream one more piece of evidence. Every adapter takes some time between "start" and its first sample, and that time differs per adapter: a camera waits for its next frame, a microphone for its next block. When a stream's first sample arrives, the stream writes down how long after the shared start time that was. This start-up delay is a per-adapter bias, the kind of error that averaging doesn't remove, so it's recorded and the alignment stage can subtract it.</p>
+
+  <div class="callout sf">
+    <p class="sf-label">In SyncField (<code>orchestrator.py</code>, <code>clock.py</code>)</p>
+    <ul>
+      <li>The start readings are a <code>SyncPoint</code>. The shared start time is <code>recording_armed_ns</code> inside the <code>SessionClock</code> passed to <code>start_recording()</code>.</li>
+      <li>Each stream's start-up timing is its <b>recording anchor</b> in <code>manifest.json</code>: <code>armed_host_ns</code> (the shared start time), <code>first_frame_host_ns</code> (its first sample), and their difference, <code>first_frame_latency_ns</code>. The docstring says alignment uses it "to remove per-adapter bias when aligning streams". Lab 3 prints it as "armed → first sample".</li>
+    </ul>
+  </div>
 
   <h2 id="stamp"><span class="num">4</span>Where timestamps are taken</h2>
-  <p>01-time section 7 asked where to stamp. Here is where SyncField does it, per adapter:</p>
+  <p>01-time section 7 asked where along the way from the device to the program the timestamp should be taken. Each of the three adapters in our labs has a different path from the device into the program. SyncField stamps <code>capture_ns</code> at the point where the data comes into its own code.</p>
+
+  <h3>Webcam</h3>
+  <p>A webcam takes a picture, usually compresses it (for example as JPEG) to fit through USB, and sends it. On the host, the OS camera system receives it, and <b>PyAV</b>, a Python library around FFmpeg, decodes it back into an array of pixels. SyncField's adapter reads that pixel array and stamps it right then, before doing anything else with it.</p>
+  <pre><code>light hits the sensor → compress → USB → OS camera system → PyAV decode → capture_ns
+                      └───────────── all of this delay is inside capture_ns ─────────────┘</code></pre>
+  <p>SyncField records no camera-side clock for these frames, so <code>capture_ns</code> is the only time a webcam frame gets.</p>
+
+  <h3>Polling sensor</h3>
+  <p>For simple sensors, the adapter author only writes a function that reads the sensor once and returns the values. In lab 1 that function is <code>make_fake_device()</code>'s <code>read()</code>. SyncField calls it over and over at a fixed rate, on its own thread, and stamps <code>capture_ns</code> as soon as it returns. The function may also return the device's own clock reading; that becomes <code>device_timestamp_ns</code>.</p>
+
+  <h3>Microphone</h3>
+  <p>Inside the computer, sound is a list of numbers, typically 44,100 per second, each one how far the air pressure was pushed at that instant. A chip next to the microphone, the <b>ADC</b> (analog-to-digital converter), measures the microphone's voltage at that fixed rate and turns each measurement into a number.</p>
+  <p>The program doesn't ask for those numbers one at a time. The audio system collects them into a block, and when a block is full it hands the block to the program by calling a function the program registered in advance. Such a function is a <b>callback</b>. It's the same shape as registering an HTTP handler: you never call the handler yourself; the web framework calls it whenever a request comes in. Here the audio system calls it whenever a block is ready.</p>
+  <p>SyncField's microphone adapter asks for blocks of 0.1 s (4,410 numbers) and reads <code>capture_ns</code> each time its callback runs. Every number goes into the <code>.wav</code> file, but a timestamp row is written far less often. The row is really a loudness summary for the on-screen meter (<code>rms</code>, <code>peak</code>), and the adapter skips a block when less than 0.1 s has passed since its last row. Callbacks arrive just about every 0.1 s, so usually every other block is skipped: in a lab 2 run, 28 of 30 gaps between rows were two blocks (8,820 numbers). Each row's <code>frame_number</code> is how many numbers had been recorded so far, so a row says "number <i>N</i> of the <code>.wav</code> file arrived at <code>capture_ns</code>".</p>
+  <p>The stamp is taken when a block is handed over, after its <b>last</b> number was recorded. So the block's first number is about 100 ms older than the stamp, plus whatever time the audio system took to deliver the block.</p>
+
+  <h3>All three stamp on arrival</h3>
   <div class="table-wrap">
   <table>
-    <thead><tr><th>Adapter</th><th><code>capture_ns</code> taken</th><th>Device clock</th></tr></thead>
+    <thead><tr><th>Adapter</th><th><code>capture_ns</code> is read</th><th>Device clock</th></tr></thead>
     <tbody>
-      <tr><td>Webcam (<code>uvc_webcam.py</code>)</td><td>Right after a decoded frame comes out of PyAV, before any further processing</td><td>None. Includes USB transfer and decode latency</td></tr>
-      <tr><td>Polling sensor (<code>polling_sensor.py</code>)</td><td>Right after the user's <code>read()</code> returns</td><td>Optional: <code>read()</code> may return <code>(channels, device_ns)</code></td></tr>
-      <tr><td>Host microphone (<code>host_audio.py</code>)</td><td>When the audio callback delivers a block</td><td>None per sample</td></tr>
+      <tr><td>Webcam</td><td>Right after PyAV hands over a decoded frame</td><td>None</td></tr>
+      <tr><td>Polling sensor</td><td>Right after the read function returns</td><td>Optional, if the read function returns one</td></tr>
+      <tr><td>Microphone</td><td>When the callback receives a 0.1 s block; a row is kept at most every 0.1 s, usually every other block</td><td>None</td></tr>
     </tbody>
   </table>
   </div>
-  <p>All three stamp on <b>host arrival</b>. That's simple and puts everything in one clock domain, at the cost of the arrival-latency jitter discussed in 01-time. The device clock is an optional extra.</p>
+  <p>All three stamp when the data <b>arrives on the host</b>. That keeps everything in one clock domain, at the cost of the arrival delay and its jitter (01-time section 5). A device clock is an optional extra.</p>
 
   <h3>The polling loop</h3>
-  <p>A <code>PollingSensorStream</code> runs its own fixed-rate loop on a thread:</p>
-  <pre><code>def _capture_once(self):
+  <p>Here is the loop that runs the polling sensor's read function at a fixed rate:</p>
+  <div class="callout sf">
+    <p class="sf-label">In SyncField (<code>adapters/polling_sensor.py</code>, simplified)</p>
+    <pre><code>def _capture_once(self):
     loop_start = time.monotonic()
-    result = self._read()                # call the device
+    result = self._read()                # the adapter's read function
     ...
     capture_ns = time.monotonic_ns()     # stamp on arrival
-    ...                                  # emit the sample
+    ...                                  # hand the sample on (section 5)
     elapsed = time.monotonic() - loop_start
-    time.sleep(max(0.0, self._period - elapsed))</code></pre>
-  <p>Compare this with the two loops in 01-time lab 2. Lab 1 and lab 3 here measure how well it holds the target rate.</p>
+    time.sleep(max(0.0, self._period - elapsed))   # _period = 1 / target rate</code></pre>
+  </div>
+  <p>Compare this with the two loops in 01-time lab 2. Labs 1 and 3 here measure how well it holds the target rate.</p>
 
   <h2 id="writer"><span class="num">5</span>Writers and crash safety</h2>
-  <p>The orchestrator gives each stream a writer by kind (<code>writer.py</code>):</p>
+  <p>Samples now have timestamps. This section covers how they get to disk, and what's left if the recording is cut off by a crash.</p>
+
+  <h3>Who writes the rows</h3>
+  <p>Adapters don't write rows themselves. Each time an adapter has a sample, it hands it to the orchestrator, again through a callback: the orchestrator registered a "here's a sample" function on every stream. The orchestrator turns the sample into a row and passes it to a <b>writer</b>, an object that owns one stream's row file and appends to it.</p>
+  <pre><code>adapter's capture loop ──sample──▶ orchestrator ──row──▶ writer ──▶ {stream}.jsonl</code></pre>
+  <p>The split keeps each part simple. An adapter only deals with its device, and the file format lives in one place, so changing the format means changing the writers, not every adapter. The bulky data, video pixels and audio numbers, is the exception: the webcam and microphone adapters write their own <code>.mp4</code> and <code>.wav</code>, and only their timestamps go through a writer.</p>
+
+  <h3>How a write reaches the disk</h3>
+  <p>A write from a program passes through two holding areas before it reaches the disk, much as sound passes through the audio buffer before the speaker (section 6):</p>
+  <pre><code>program's write()
+  └ program's own buffer     memory inside the Python process
+     │  flush()               hand it to the OS
+     └ OS page cache          memory inside the OS
+        │  fsync(), or the OS on its own a little later
+        └ disk</code></pre>
   <ul>
-    <li><b><code>StreamWriter</code></b> (video/audio/custom → <code>.timestamps.jsonl</code>): writes one JSON line per frame and calls <code>flush()</code> after every line.</li>
-    <li><b><code>SensorWriter</code></b> (sensor → <code>.jsonl</code>): the same by default. High-rate adapters can opt into a queue so JSON encoding and batched flushes run on a separate writer thread, "so a slow filesystem can't apply back-pressure to a hardware receive loop".</li>
-    <li><b><code>SessionLogWriter</code></b>: flushes on every event, "so the log survives a process crash mid-recording".</li>
+    <li><b>If the program crashes or is killed:</b> whatever was still in the program's own buffer is lost. Anything already flushed is with the OS, and the OS writes it to disk anyway.</li>
+    <li><b>If the OS crashes or the power goes out:</b> whatever was still in the page cache is lost too. Only <code>fsync()</code> waits until the data is really on the disk.</li>
   </ul>
-  <p>JSON Lines is a good fit for this: every line is a complete record, so a crash loses at most the last partial line, and the file can still be read up to that point.</p>
-  <div class="callout"><p><code>flush()</code> hands the data from Python's buffer to the OS, which survives the <b>process</b> crashing. It is not <code>fsync()</code>: if the OS crashes or the power goes out, data still in the OS's page cache can be lost.</p></div>
-  <p><code>manifest.json</code> is only written at <code>stop()</code>. A crashed recording has timestamps and a session log but no manifest.</p>
+  <p>The rows are in <b>JSON Lines</b> format: one complete JSON object per line. A crash can cut off at most the line being written. Every line before it is still a complete record, and the file can be read up to that point.</p>
+
+  <h3>When the disk is slow</h3>
+  <p>Writing and flushing a row usually takes microseconds. But the disk can stall for tens of milliseconds, for example when another program is writing heavily. If the capture loop writes each row itself, the loop stops for that long: it doesn't read the device, the device's own buffer can overflow and drop samples, and the samples that wait get later <code>capture_ns</code> values. The slow disk pushes its delay back into the capture loop. This is called <b>back-pressure</b>.</p>
+  <p>The fix is to put a queue between the two. The capture loop only drops each row into the queue and goes straight back to the device. A separate writer thread takes rows off the queue and writes them, in batches. If the queue ever fills up, the capture loop doesn't wait. It records the row as lost and moves on, so a full queue shows up as a counted failure instead of a silent delay. The cost: rows still in the queue or not yet flushed are lost if the program crashes.</p>
+
+  <div class="callout sf">
+    <p class="sf-label">In SyncField (<code>writer.py</code>, <code>orchestrator.py</code>)</p>
+    <ul>
+      <li><code>StreamWriter</code> writes video and audio streams' <code>.timestamps.jsonl</code>, and calls <code>flush()</code> after every row.</li>
+      <li><code>SensorWriter</code> writes sensor streams' <code>.jsonl</code>, the same way by default. An adapter can turn on the queue with <code>queue_capacity</code>; rows are then written and flushed in batches, when a batch is full or at least every 0.1 s. The docstring's reason: "so a slow filesystem can't apply back-pressure to a hardware receive loop". SyncField's adapter for OGL's OGLO glove turns it on (a 4,096-row queue, batches of 256); its comment says this cuts a pair of gloves from about 1,750 flushes per second to about 60.</li>
+      <li><code>SessionLogWriter</code> writes <code>session_log.jsonl</code> and flushes on every event, "so the log survives a process crash mid-recording".</li>
+      <li>None of them calls <code>fsync()</code>.</li>
+      <li><code>manifest.json</code> is written only at <code>stop()</code>. A recording that crashed has rows and a session log, but no manifest.</li>
+    </ul>
+  </div>
 
   <h2 id="chirp"><span class="num">6</span>The chirp anchor</h2>
-  <p>01-time's glossary defined an anchor as a physical event recorded by all streams at once. SyncField's anchor is a sound (<code>tone.py</code>):</p>
-  <ul>
-    <li>A <b>chirp</b> is a linear frequency sweep: the default start chirp rises from 17 kHz to 19 kHz over 500 ms; the stop chirp falls back. 17–19 kHz is nearly inaudible to adults but survives a laptop speaker, microphones, and AAC encoding. An audible 400–2500 Hz preset also exists.</li>
-    <li>A sweep is used rather than a plain beep because its cross-correlation has a <b>single sharp peak</b>: slide the known chirp along a recorded audio track and the match is strong at exactly one offset. The comment claims sub-millisecond anchoring.</li>
-    <li>The chirp plays after every stream is writing, so every microphone in the room (on this host and on other hosts) records it.</li>
-  </ul>
+  <p>This section is about a single moment in the capture stage: just after recording starts, the computer plays a short sound through its own speaker. It walks through why, what the sound is, and why knowing <i>when</i> it played is harder than it looks. SyncField's own names only appear at the end, in the boxes marked "In SyncField".</p>
 
-  <h3>When did the chirp actually play?</h3>
-  <p>Calling "play" is not the moment sound leaves the speaker. The audio driver buffers samples first. So the player asks PortAudio for the DAC time, which tells it when the first sample will actually leave the digital-to-analog converter:</p>
-  <pre><code>hardware_ns = monotonic_at_callback + (outputBufferDacTime − currentTime) × 1e9</code></pre>
-  <p>The result is tagged with its <b>source</b>, so a later stage knows how much to trust it:</p>
+  <h3>Why make a sound at all</h3>
+  <p>Say a webcam, a microphone and a glove record the moment a hand touches a cup. Each stamps the data when it <b>arrives</b> on the host, and each device takes a different time to deliver: a webcam frame might arrive about 60 ms after the moment, a microphone block about 20 ms, a glove sample about 1 ms. Nobody tells us these delays. So the same physical moment is written down at three different times, and averaging many samples won't fix it: the webcam is late by roughly the same amount every time (a <b>bias</b>), so the average is late too. Averaging only removes delays that wobble randomly around zero (<b>noise</b>).</p>
+  <p>Film crews solve this with a clapperboard: one sharp "clap" that the camera and the sound recorder both capture. Later, find the clap in each file, and those points are the same instant. This is what 01-time's glossary called an <b>anchor</b>. SyncField's clap is a short sound played through the computer's speaker. Every microphone in the room records it: the host's own microphone, and the microphones of other hosts nearby.</p>
+
+  <h3>What the sound is: a chirp</h3>
+  <p>To find the sound in a recording, the aligner uses <b>cross-correlation</b>: it takes the known sound, slides it along the recording one position at a time, and at each position scores how much the two look alike. The position with the best score is where the sound is.</p>
+  <p>The shape of the sound decides how clear that best score is:</p>
+  <ul>
+    <li><b>A plain beep</b> (one fixed tone, say 1 kHz) repeats the same wave every 1 ms. Slide it by 1 ms and it still matches almost perfectly, so the score has many near-equal peaks and the true position is ambiguous.</li>
+    <li><b>A hand clap</b> is sharp, but its shape differs every time, and nobody records when it happened on the computer's clock.</li>
+    <li><b>A chirp</b> is a tone whose pitch slides steadily, for example from 17 kHz up to 19 kHz over 500 ms. Every instant has a different pitch, so the recording matches it only at one exact position.</li>
+  </ul>
+  <pre><code>beep  score:  ▁▃▆█▆▃▁▃▆█▆▃▁▃▆█▆▃▁   many similar peaks
+chirp score:  ▁▁▁▁▁▁▁▁▁█▁▁▁▁▁▁▁▁▁   one sharp peak</code></pre>
+  <p>17–19 kHz is near the top of human hearing, so most adults barely hear it, yet laptop speakers and microphones still handle it. An audible preset (400–2500 Hz) exists for when that matters more than silence; lab 2 uses it so you can hear it. A rising chirp marks the start of a recording and a falling one marks the stop.</p>
+
+  <h3>We also need the time it played</h3>
+  <p>Finding the chirp in a recording gives a <b>position in that file</b>, say 3.2 s into the audio track. To connect that to every other stream, we also need <b>when the sound came out of the speaker, on the host clock</b>. Then "3.2 s into the audio track" equals "host time T", and every track that recorded the chirp can be lined up on T.</p>
+  <p>The obvious answer, "read the clock when we tell the computer to play", is wrong by several milliseconds or more. To see why, we need to look at how a computer plays sound.</p>
+
+  <h3>How a computer plays sound</h3>
+  <p>Section 4 showed sound coming in: an ADC turns the microphone's voltage into a list of numbers, 44,100 per second. Playing is the same path in reverse. Each number says how far the speaker cone should be pushed at that instant, and in front of the speaker sits a chip called a <b>DAC</b> (digital-to-analog converter) that turns one number into a voltage exactly every 1/44,100 s. The DAC never pauses and never waits: if the next number isn't ready, the sound glitches.</p>
+  <p>So the operating system keeps a queue of upcoming numbers in front of the DAC, called the <b>audio buffer</b>. It works like an order queue in a restaurant: a new order (our chirp) is cooked only after the orders already in the queue. The numbers we hand over come out of the speaker only after everything ahead of them has played, which takes from a few to a few tens of milliseconds and differs between machines and devices.</p>
+  <p>Between our program and the DAC there are several layers, much like the layers between a web app and a network card:</p>
+  <pre><code>our Python program
+  └ sounddevice      a Python library that wraps PortAudio
+     └ PortAudio     a C library that hides the OS differences (one API for macOS, Windows, Linux)
+        └ Core Audio  macOS's audio system (WASAPI on Windows, ALSA on Linux)
+           └ driver   OS code that talks to the actual audio device
+              └ DAC → speaker</code></pre>
+
+  <h3>Callbacks: the audio system asks for the next numbers</h3>
+  <p>On the microphone side (section 4), the audio system calls the program's callback whenever a block of recorded numbers is <b>ready</b>. Playing works the same way in reverse. The program does not push the whole sound down these layers at once; the audio system <b>pulls</b>. Whenever its buffer runs low, it calls the program's callback with an empty block to fill with the next numbers, every few milliseconds, for as long as the sound plays.</p>
+
+  <h3>Asking "when will this come out?"</h3>
+  <p>Along with each request, PortAudio passes the callback two readings of the audio system's own clock: "now", and "when the block you're filling right now will leave the DAC". Their difference is exactly the buffer wait we couldn't know before. So in the <b>first</b> callback, the one that fills the chirp's first numbers, the program can compute:</p>
+  <pre><code>sound left the speaker  =  host clock now  +  (DAC time − audio clock now)
+                           └ host monotonic    └ "this many ms from now", from the audio clock</code></pre>
+  <p>The audio system's clock is a different clock domain from the host's monotonic clock, so its absolute values are never mixed with host times. Only the <b>difference</b> is used, a span of a few milliseconds over which drift between the two clocks is negligible (01-time section 3).</p>
+
+  <h3>Three possible outcomes</h3>
+  <p>That reading isn't always available, so playing the chirp ends in one of three ways:</p>
   <div class="table-wrap">
   <table>
-    <thead><tr><th><code>chirp_start_source</code></th><th>Meaning</th></tr></thead>
+    <thead><tr><th>What happened</th><th>Time we can record</th><th>How good</th></tr></thead>
     <tbody>
-      <tr><td><code>hardware</code></td><td>From the driver's DAC time. The best SyncField can do</td></tr>
-      <tr><td><code>software_fallback</code></td><td>The driver gave no DAC time, so it uses the time just before the play call (~1 ms jitter)</td></tr>
-      <tr><td><code>silent</code></td><td>No sound was played (lab 1). This host can't serve as an acoustic reference</td></tr>
+      <tr><td>① The audio system reported the DAC time</td><td>When the sound actually left the speaker (the formula above)</td><td>Best</td></tr>
+      <tr><td>② Sound was played, but no usable DAC time: the device or driver reports none (for example both readings come back as 0), or the first callback doesn't arrive within 0.1 s</td><td>The host time read just before asking the audio system to play</td><td>Second best: too early by the unknown buffer wait</td></tr>
+      <tr><td>③ No sound was played: chirp turned off, no speaker, or lab 1's silent player</td><td>None</td><td>This host can't act as an anchor</td></tr>
     </tbody>
   </table>
   </div>
-  <p>With <code>chirp_start_ns</code> (when the chirp left this host's speaker, in host monotonic time) and an audio track that recorded it, an aligner can find the chirp's position in each track and line the tracks up. This is the same idea as the 01-time error budget: record the value, record where it came from, and let the later stage decide how much precision to claim.</p>
+  <p>The recorded time is used as the reference for aligning every stream, so a later stage must know which of the three it got. This is the 01-time error-budget idea again: record the value <b>and where it came from</b>, and let the later stage decide how much precision to claim.</p>
+
+  <div class="callout sf">
+    <p class="sf-label">In SyncField (<code>tone.py</code>, <code>types.py</code>, <code>orchestrator.py</code>)</p>
+    <ul>
+      <li>The callback is a function named <code>callback</code> inside <code>SoundDeviceChirpPlayer.play()</code>, registered with <code>sd.OutputStream(callback=callback)</code>. PortAudio's two readings arrive as <code>time_info.currentTime</code> and <code>time_info.outputBufferDacTime</code>.</li>
+      <li>Outcome ① is computed in that callback and stored in the variable <code>hardware_ns</code>:
+        <pre><code>hardware_ns = monotonic_ns_at_callback + (outputBufferDacTime − currentTime) × 1e9</code></pre></li>
+      <li>Outcome ②'s time is <code>software_ns</code>, read just before the audio stream is created.</li>
+      <li>Which outcome happened is the <b>source</b> tag: <code>"hardware"</code> (①, the time came from the audio hardware side), <code>"software_fallback"</code> (②, the program's own reading used as a fallback; the docs put its precision at about 1 ms jitter), <code>"silent"</code> (③).</li>
+      <li>All three travel together in a <code>ChirpEmission</code>. The orchestrator writes <code>hardware_ns</code> if present, else <code>software_ns</code>, to <code>sync_point.json</code> as <code>chirp_start_ns</code> / <code>chirp_stop_ns</code>, and the tag as <code>chirp_start_source</code> / <code>chirp_stop_source</code>.</li>
+      <li>The start chirp plays about 200 ms after every stream has started (<code>post_start_stabilization_ms</code>), to let the audio pipelines warm up. That's the ~205 ms you see for <code>chirp_start</code> in lab 3's output.</li>
+    </ul>
+  </div>
+  <p>In the overall pipeline: everything above happens in the <b>capture</b> stage and leaves just two values per chirp in <code>sync_point.json</code>. The <b>alignment</b> stage (SyncField's closed sync service; A3 for us) is what later finds the chirp in each audio track and uses those values.</p>
 
   <h2 id="borrow"><span class="num">7</span>What we borrow, and what we change</h2>
   <div class="table-wrap">
@@ -255,10 +392,17 @@
       <tr><th>sync point</th><td>A monotonic and a wall-clock reading taken at the same moment at session start</td></tr>
       <tr><th>recording anchor</th><td>A shared arm time plus each stream's first-frame time, used to estimate per-adapter start-up latency</td></tr>
       <tr><th>JSON Lines (JSONL)</th><td>One complete JSON object per line; append-friendly and robust to a crash mid-file</td></tr>
+      <tr><th>writer</th><td>An object that owns one stream's row file and appends rows to it</td></tr>
+      <tr><th>back-pressure</th><td>A slow later stage (here, the disk) holding up an earlier one (the capture loop); avoided by putting a queue between them</td></tr>
       <tr><th>flush vs fsync</th><td>flush hands data to the OS (survives a process crash); fsync forces it to disk (survives an OS crash or power loss)</td></tr>
       <tr><th>chirp</th><td>A frequency sweep whose cross-correlation has a single sharp peak, used as an acoustic anchor</td></tr>
       <tr><th>cross-correlation</th><td>Sliding a known signal along a recording and measuring the match at each offset; the peak gives the offset</td></tr>
-      <tr><th>DAC time</th><td>When the audio hardware will actually output a sample, as reported by the driver</td></tr>
+      <tr><th>DAC</th><td>Digital-to-analog converter: the chip that turns one sound number into a voltage at a fixed rate</td></tr>
+      <tr><th>audio buffer</th><td>The queue of upcoming sound numbers in front of the DAC; new sound plays only after what's already queued</td></tr>
+      <tr><th>callback</th><td>A function registered in advance and called by someone else when something happens: the audio system with a recorded block, or asking for the next block to play; an adapter with a new sample</td></tr>
+      <tr><th>ADC</th><td>Analog-to-digital converter: the chip that measures the microphone's voltage at a fixed rate and turns it into numbers</td></tr>
+      <tr><th>PortAudio</th><td>A C library giving one audio API across macOS, Windows and Linux; used from Python through sounddevice</td></tr>
+      <tr><th>DAC time</th><td>When the block being filled now will leave the DAC, as reported by the audio system on its own clock</td></tr>
     </tbody>
   </table>
   </div>

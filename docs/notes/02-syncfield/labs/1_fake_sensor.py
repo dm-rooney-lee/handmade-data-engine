@@ -20,7 +20,7 @@ import syncfield as sf
 from syncfield.adapters import PollingSensorStream
 from syncfield.tone import SilentChirpPlayer
 
-OUTPUT_DIR = Path(__file__).parent / "output"
+OUTPUT_DIR = Path(__file__).parent / "output" / Path(__file__).stem  # output/<this lab>/ep_*
 
 # The fake device's clock, as in 01-time lab 3: offset(x) = offset0 + drift * (x - start)
 DEVICE_OFFSET0_NS = 123_456_789
@@ -34,13 +34,13 @@ def make_fake_device(start_ns):
         # The device samples first and stamps the sample on its own clock...
         host_now = time.monotonic_ns()
         device_ns = host_now + DEVICE_OFFSET0_NS + int((host_now - start_ns) * DEVICE_DRIFT_PPM * 1e-6)
-        value = math.sin(2 * math.pi * 1.0 * (host_now - start_ns) / 1e9)  # a 1 Hz sine
+        fake_value = math.sin(2 * math.pi * 1.0 * (host_now - start_ns) / 1e9)  # a 1 Hz sine
 
         # ...then the sample takes a while to reach the host (USB, buffering), like a real device.
         time.sleep(rng.uniform(0.0002, 0.0008))
 
         # Returning (channels, device_ns) tells SyncField this sample carries a device timestamp.
-        return {"value": value}, device_ns
+        return {"value": fake_value}, device_ns
 
     return read
 

@@ -7,7 +7,8 @@ Goals:
   session. Its trend is offset + drift (01-time lab 3); its wobble is the arrival latency jitter.
 - Anchors: see where the chirps and the recording anchor sit relative to each stream's samples.
 
-usage: uv run --group notes 3_analyze_episode.py [episode_dir]   (default: latest in ./output)
+usage: uv run --group notes 3_analyze_episode.py [episode_dir]
+       default: the latest episode from lab 1 or 2 (output/1_fake_sensor/, output/2_webcam_mic/)
 """
 import json
 import sys
@@ -74,7 +75,7 @@ def main():
     if len(sys.argv) > 1:
         episode_dir = Path(sys.argv[1])
     else:
-        episode_dir = max(OUTPUT_DIR.glob("ep_*"), key=lambda p: p.stat().st_mtime)
+        episode_dir = max(OUTPUT_DIR.glob("*/ep_*"), key=lambda p: p.stat().st_mtime)
     sync_point = json.loads((episode_dir / "sync_point.json").read_text())
     manifest = json.loads((episode_dir / "manifest.json").read_text())
     session_start = sync_point["monotonic_ns"]

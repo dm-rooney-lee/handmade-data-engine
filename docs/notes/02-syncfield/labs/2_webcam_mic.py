@@ -20,7 +20,7 @@ from pathlib import Path
 import syncfield as sf
 from syncfield.adapters import UVCWebcamStream
 
-OUTPUT_DIR = Path(__file__).parent / "output"
+OUTPUT_DIR = Path(__file__).parent / "output" / Path(__file__).stem  # output/<this lab>/ep_*
 
 
 def main():
