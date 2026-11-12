@@ -12,103 +12,125 @@ usage: uv run --group notes 3_analyze_episode.py [episode_dir]
 """
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 
-
-def load_jsonl(path):
-    with open(path) as f:
-        return [json.loads(line) for line in f if line.strip()]
+JsonLine = dict[str, Any]  # one parsed JSONL line
 
 
-def percentile(sorted_values, q):
-    return sorted_values[int(q * (len(sorted_values) - 1))]
+def load_jsonl(path: Path) -> list[JsonLine]:
+    with open(path) as file:
+        return [json.loads(line) for line in file if line.strip()]
 
 
-def fit_line(xs, ys):
-    """Least-squares line through (xs, ys). Returns (slope, intercept)."""
-    n = len(xs)
-    mean_x = sum(xs) / n
-    mean_y = sum(ys) / n
-    sxx = sum((x - mean_x) ** 2 for x in xs)
-    sxy = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
-    slope = sxy / sxx
+def percentile(sorted_values: Sequence[float], quantile: float) -> float:
+    """quantile is 0..1, e.g. 0.99 for p99. sorted_values must already be sorted."""
+    return sorted_values[int(quantile * (len(sorted_values) - 1))]
+
+
+def fit_line(x_values: Sequence[float], y_values: Sequence[float]) -> tuple[float, float]:
+    """Least-squares line through (x_values, y_values). Returns (slope, intercept)."""
+    count = len(x_values)
+    mean_x = sum(x_values) / count
+    mean_y = sum(y_values) / count
+    x_spread = sum((x - mean_x) ** 2 for x in x_values)  # how far x spreads around its mean
+    xy_co_spread = sum((x - mean_x) * (y - mean_y) for x, y in zip(x_values, y_values))  # how y moves with x
+    slope = xy_co_spread / x_spread
     return slope, mean_y - slope * mean_x
 
 
-def report_intervals(rows, target_hz):
-    capture = [r["capture_ns"] for r in rows]
-    intervals = sorted(b - a for a, b in zip(capture, capture[1:]))
-    total_s = (capture[-1] - capture[0]) / 1e9
-    period_ns = 1e9 / target_hz if target_hz else percentile(intervals, 0.5)
-    late = sum(1 for iv in intervals if iv > 2 * period_ns)
+def report_intervals(json_lines: list[JsonLine], target_hz: float | None) -> None:
+    capture_ns_list = [json_line["capture_ns"] for json_line in json_lines]
+    # time between consecutive samples, sorted so percentile() can index into it
+    intervals_ns = sorted(
+        current_ns - previous_ns for previous_ns, current_ns in zip(capture_ns_list, capture_ns_list[1:])
+    )
+    duration_s = (capture_ns_list[-1] - capture_ns_list[0]) / 1e9
+    expected_interval_ns = 1e9 / target_hz if target_hz else percentile(intervals_ns, 0.5)
+    late_count = sum(1 for interval_ns in intervals_ns if interval_ns > 2 * expected_interval_ns)
     print(
-        f"    rate={(len(capture) - 1) / total_s:8.2f}Hz (target {target_hz or '?'})  "
-        f"p50={percentile(intervals, 0.5) / 1e3:8.1f}us  p99={percentile(intervals, 0.99) / 1e3:8.1f}us  "
-        f"max={intervals[-1] / 1e3:8.1f}us  late(>2x)={late}"
+        f"    rate={(len(capture_ns_list) - 1) / duration_s:8.2f}Hz (target {target_hz or '?'})  "
+        f"p50={percentile(intervals_ns, 0.5) / 1e3:8.1f}us  p99={percentile(intervals_ns, 0.99) / 1e3:8.1f}us  "
+        f"max={intervals_ns[-1] / 1e3:8.1f}us  late(>2x)={late_count}"
     )
 
 
-def report_two_clocks(rows):
-    pairs = [(r["capture_ns"], r["device_timestamp_ns"]) for r in rows if r.get("device_timestamp_ns") is not None]
-    if len(pairs) < 2:
+def report_two_clocks(json_lines: list[JsonLine]) -> None:
+    capture_and_device_ns = [
+        (json_line["capture_ns"], json_line["device_timestamp_ns"])
+        for json_line in json_lines
+        if json_line.get("device_timestamp_ns") is not None
+    ]
+    if len(capture_and_device_ns) < 2:
         print("    device_timestamp_ns: none (host arrival time only)")
         return
 
     # device - capture = (device clock - host clock) - arrival latency
-    xs = [(c - pairs[0][0]) / 1e9 for c, _ in pairs]  # seconds since the first sample
-    diffs = [(d - c) / 1e3 for c, d in pairs]  # us
-    slope, intercept = fit_line(xs, diffs)
-    residuals = sorted(y - (intercept + slope * x) for x, y in zip(xs, diffs))
-    print(
-        f"    device - capture: start={diffs[0]:12.1f}us  end={diffs[-1]:12.1f}us  "
-        f"fitted drift={slope:.2f}ppm"
+    first_capture_ns = capture_and_device_ns[0][0]
+    elapsed_s = [(capture_ns - first_capture_ns) / 1e9 for capture_ns, _ in capture_and_device_ns]
+    device_minus_capture_us = [(device_ns - capture_ns) / 1e3 for capture_ns, device_ns in capture_and_device_ns]
+    # the slope is in us per second, and 1us per 1s is exactly 1ppm
+    drift_ppm, offset_at_first_sample_us = fit_line(elapsed_s, device_minus_capture_us)
+    residuals_us = sorted(
+        difference_us - (offset_at_first_sample_us + drift_ppm * seconds)
+        for seconds, difference_us in zip(elapsed_s, device_minus_capture_us)
     )
     print(
-        f"    residual around the line: p1={percentile(residuals, 0.01):+8.1f}us  "
-        f"p50={percentile(residuals, 0.5):+8.1f}us  p99={percentile(residuals, 0.99):+8.1f}us"
+        f"    device - capture: start={device_minus_capture_us[0]:12.1f}us  "
+        f"end={device_minus_capture_us[-1]:12.1f}us  fitted drift={drift_ppm:.2f}ppm"
+    )
+    print(
+        f"    residual around the line: p1={percentile(residuals_us, 0.01):+8.1f}us  "
+        f"p50={percentile(residuals_us, 0.5):+8.1f}us  p99={percentile(residuals_us, 0.99):+8.1f}us"
     )
 
 
-def main():
+def main() -> None:
     if len(sys.argv) > 1:
         episode_dir = Path(sys.argv[1])
     else:
-        episode_dir = max(OUTPUT_DIR.glob("*/ep_*"), key=lambda p: p.stat().st_mtime)
+        # every ep_* under output/<lab>/, then the one modified most recently (not by name)
+        episode_dir = max(OUTPUT_DIR.glob("*/ep_*"), key=lambda episode: episode.stat().st_mtime)
     sync_point = json.loads((episode_dir / "sync_point.json").read_text())
     manifest = json.loads((episode_dir / "manifest.json").read_text())
-    session_start = sync_point["monotonic_ns"]
+    session_start_ns = sync_point["monotonic_ns"]
 
-    def since_start_ms(ns):
-        return (ns - session_start) / 1e6
+    def since_start_ms(host_ns: int) -> float:
+        return (host_ns - session_start_ns) / 1e6
 
     print(f"[{episode_dir.name}]  host={sync_point['host_id']}  started {sync_point['iso_datetime']}")
-    for name in ("chirp_start", "chirp_stop"):
-        if f"{name}_ns" in sync_point:
+    for chirp_name in ("chirp_start", "chirp_stop"):
+        if f"{chirp_name}_ns" in sync_point:
             print(
-                f"  {name:11} at {since_start_ms(sync_point[f'{name}_ns']):9.1f}ms  "
-                f"source={sync_point.get(f'{name}_source')}"
+                f"  {chirp_name:11} at {since_start_ms(sync_point[f'{chirp_name}_ns']):9.1f}ms  "
+                f"source={sync_point.get(f'{chirp_name}_source')}"
             )
 
-    for stream_id, info in manifest["streams"].items():
-        print(f"\n  stream={stream_id}  kind={info['kind']}  status={info['status']}  frames={info['frame_count']}")
-        anchor = info.get("recording_anchor")
-        if anchor:
+    for stream_id, stream_info in manifest["streams"].items():
+        print(
+            f"\n  stream={stream_id}  kind={stream_info['kind']}  status={stream_info['status']}  "
+            f"frames={stream_info['frame_count']}"
+        )
+        recording_anchor = stream_info.get("recording_anchor")
+        if recording_anchor:
             print(
-                f"    first sample at {since_start_ms(anchor['first_frame_host_ns']):9.1f}ms  "
-                f"(armed -> first sample {anchor['first_frame_latency_ns'] / 1e6:.2f}ms)"
+                f"    first sample at {since_start_ms(recording_anchor['first_frame_host_ns']):9.1f}ms  "
+                f"(armed -> first sample {recording_anchor['first_frame_latency_ns'] / 1e6:.2f}ms)"
             )
 
-        path = episode_dir / f"{stream_id}.jsonl"
-        if not path.exists():
-            path = episode_dir / f"{stream_id}.timestamps.jsonl"
-        rows = load_jsonl(path)
-        if len(rows) < 2:
+        # sensors write {stream}.jsonl; video and audio write {stream}.timestamps.jsonl next to the media file
+        samples_path = episode_dir / f"{stream_id}.jsonl"
+        if not samples_path.exists():
+            samples_path = episode_dir / f"{stream_id}.timestamps.jsonl"
+        json_lines = load_jsonl(samples_path)
+        if len(json_lines) < 2:
             print("    too few samples")
             continue
-        report_intervals(rows, info["capabilities"].get("target_hz"))
-        report_two_clocks(rows)
+        report_intervals(json_lines, stream_info["capabilities"].get("target_hz"))
+        report_two_clocks(json_lines)
 
 
 if __name__ == "__main__":
