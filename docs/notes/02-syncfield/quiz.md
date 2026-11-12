@@ -1,6 +1,6 @@
 # 02 · SyncField
 
-Read the concepts in [concept.html](concept.html), run the experiments in `labs/`, then write your own answer under each question's `Answer:`.
+Read the concepts in [concept.html](concept.html), run the experiments in `labs/`, and write up what you understood in [my-note.md](my-note.md). Then write your own answer under each question's `Answer:` to check that understanding.
 The SyncField source quoted in concept.html is installed at `.venv/lib/python3.12/site-packages/syncfield/` (version 0.8.14).
 
 ```bash

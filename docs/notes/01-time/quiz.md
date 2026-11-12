@@ -1,6 +1,6 @@
 # 01 · Time
 
-Read the concepts in [concept.html](concept.html), run the experiments in `labs/`, then write your own answer under each question's `Answer:`.
+Read the concepts in [concept.html](concept.html), run the experiments in `labs/`, and write up what you understood in [my-note.md](my-note.md). Then write your own answer under each question's `Answer:` to check that understanding.
 
 ```bash
 cd labs
