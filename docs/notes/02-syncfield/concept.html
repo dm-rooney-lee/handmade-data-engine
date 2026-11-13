@@ -67,6 +67,10 @@
   figure svg { width: 100%; height: auto; display: block; color: var(--text); }
   figcaption { color: var(--muted); font-size: 0.88em; margin-top: 8px; }
   .muted { color: var(--muted); }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .controls button { font: inherit; font-size: 0.88em; color: var(--text); background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+  .controls button:hover { border-color: var(--accent-2); }
+  .step-note { min-height: 3.4em; }
   nav ol { padding-left: 20px; margin: 0; }
   nav a { color: var(--text); }
 </style>
@@ -156,7 +160,7 @@
   </table>
   </div>
   <p>Every stream on one host stamps <code>capture_ns</code> from the same host monotonic clock, so all of them share one clock domain. Two streams' <code>capture_ns</code> values can be compared directly, with no offset or drift to correct between them. This is the 01-time principle of keeping the number of clock domains small.</p>
-  <p>A device clock, when there is one, goes in its own field next to <code>capture_ns</code> instead of replacing it. SyncField's docstring explains this as keeping "host-arrival quality checks" meaningful: checks that only look at <code>capture_ns</code>, such as the rate and interval statistics lab 3 computes. Summary question 1 asks you to work out why that matters.</p>
+  <p>A device clock, when there is one, goes in its own field next to <code>capture_ns</code> instead of replacing it. SyncField's docstring explains this as keeping "host-arrival quality checks" meaningful: checks that only look at <code>capture_ns</code>, such as the rate and interval statistics lab 3 computes. Quiz question 1 asks you to work out why that matters.</p>
   <p><code>sync_point.json</code> holds two clock readings taken at the same moment when the episode starts: <code>monotonic_ns</code> and <code>wall_clock_ns</code>. Inside a host everything uses monotonic time, because it never jumps (01-time section 4). But a monotonic reading alone doesn't say what date it was. The wall-clock reading taken alongside it places the episode in real-world time, so that people, and other hosts, can tell roughly when it was recorded.</p>
 
   <h2 id="lifecycle"><span class="num">3</span>The Stream interface and the session lifecycle</h2>
@@ -200,9 +204,9 @@
     <li><b>Read one start time and give it to everyone.</b> It reads the host clock once and gives that same value to every stream. Each stream then knows exactly when "start" was, as one shared value rather than one per stream.</li>
     <li><b>Flip every stream's switch at the same time.</b> It does this on one thread per stream, so a slow adapter can't delay the others.</li>
     <li><b>Undo everything if one stream fails.</b> If any stream fails to start, it stops the ones that did and reports the error. An episode is either recorded by every stream or not at all.</li>
-    <li><b>Play the start sound.</b> Only once every stream is recording (section 6), so that the recordings actually contain it.</li>
+    <li><b>Wait, then play the start sound.</b> It waits a fixed 200 ms after flipping the switches and then plays a short sound (section 6). The wait is there so that the streams, the microphone above all, are already writing when the sound plays, and the recordings contain it. Note that it only waits; it doesn't check.</li>
   </ol>
-  <p>Step 2 gives each stream one more piece of evidence. Every adapter takes some time between "start" and its first sample, and that time differs per adapter: a camera waits for its next frame, a microphone for its next block. When a stream's first sample arrives, the stream writes down how long after the shared start time that was. This start-up delay is a per-adapter bias, the kind of error that averaging doesn't remove, so it's recorded and the alignment stage can subtract it.</p>
+  <p>Step 2 gives each stream one more piece of evidence. Devices have been sending data since they were opened, whether or not anything happens: a webcam pointed at a still scene sends 30 frames a second, a microphone in a quiet room sends silence, and a glove on a hand at rest sends "no pressure" samples at its fixed rate. What changes at the switch is only that this data starts being written. Every adapter takes some time between the switch and its first written sample, and that time differs per adapter: a camera waits for its next frame, a microphone for its next block. When a stream's first sample arrives, the stream writes down how long after the shared start time that was. This start-up delay is a per-adapter bias, the kind of error that averaging doesn't remove, so it's recorded and the alignment stage can subtract it.</p>
 
   <div class="callout sf">
     <p class="sf-label">In SyncField (<code>orchestrator.py</code>, <code>clock.py</code>)</p>
@@ -211,6 +215,47 @@
       <li>Each stream's start-up timing is its <b>recording anchor</b> in <code>manifest.json</code>: <code>armed_host_ns</code> (the shared start time), <code>first_frame_host_ns</code> (its first sample), and their difference, <code>first_frame_latency_ns</code>. The docstring says alignment uses it "to remove per-adapter bias when aligning streams". Lab 3 prints it as "armed → first sample".</li>
     </ul>
   </div>
+
+  <h3>One start, on one timeline</h3>
+  <p>Here is one real start from lab 2 (episode <code>ep_20261112_225224</code>), with every time measured from the <code>sync_point</code> reading. Filled marks are things the orchestrator <b>does</b>. Hollow marks are things it only <b>observes</b>: a recording anchor isn't an action, it's written down when a stream's first sample happens to arrive.</p>
+  <figure>
+    <svg viewBox="0 0 640 200" role="img" aria-label="Timeline of one recording start: sync_point at 0 ms, armed at 0.9 ms, microphone first sample at 14.2 ms, webcam first sample at 29.8 ms, a 200 ms wait, start chirp at 259.6 ms">
+      <line x1="30" y1="100" x2="620" y2="100" stroke="currentColor" stroke-opacity="0.5"/>
+      <g font-size="11" fill="currentColor" fill-opacity="0.6" text-anchor="middle">
+        <line x1="30" y1="96" x2="30" y2="104" stroke="currentColor" stroke-opacity="0.5"/><text x="30" y="120">0</text>
+        <line x1="230" y1="96" x2="230" y2="104" stroke="currentColor" stroke-opacity="0.5"/><text x="230" y="120">100</text>
+        <line x1="430" y1="96" x2="430" y2="104" stroke="currentColor" stroke-opacity="0.5"/><text x="430" y="120">200</text>
+        <text x="612" y="120">ms</text>
+      </g>
+      <!-- 200 ms wait: from the switch (~1.1 ms) to ~201 ms -->
+      <rect x="32" y="176" width="400" height="16" rx="3" fill="var(--accent)" fill-opacity="0.12" stroke="var(--accent)" stroke-opacity="0.5"/>
+      <text x="232" y="188" text-anchor="middle" font-size="11" fill="var(--accent)">fixed 200 ms wait (no check)</text>
+      <!-- actions -->
+      <circle cx="30" cy="100" r="5" fill="var(--accent)"/>
+      <text x="30" y="40" font-size="12" fill="var(--accent)">sync_point (0)</text>
+      <line x1="30" y1="44" x2="30" y2="94" stroke="var(--accent)" stroke-opacity="0.5"/>
+      <circle cx="32" cy="100" r="5" fill="var(--accent)"/>
+      <text x="40" y="62" font-size="12" fill="var(--accent)">armed, switches flipped (0.9)</text>
+      <line x1="32" y1="66" x2="32" y2="94" stroke="var(--accent)" stroke-opacity="0.5"/>
+      <circle cx="549" cy="100" r="5" fill="var(--accent)"/>
+      <text x="549" y="62" text-anchor="middle" font-size="12" fill="var(--accent)">start chirp (259.6)</text>
+      <line x1="549" y1="66" x2="549" y2="94" stroke="var(--accent)" stroke-opacity="0.5"/>
+      <!-- observations -->
+      <circle cx="58" cy="100" r="5" fill="var(--bg)" stroke="var(--accent-2)" stroke-width="2"/>
+      <text x="64" y="162" font-size="12" fill="var(--accent-2)">mic anchor (14.2)</text>
+      <line x1="58" y1="106" x2="58" y2="158" stroke="var(--accent-2)" stroke-opacity="0.5"/>
+      <circle cx="90" cy="100" r="5" fill="var(--bg)" stroke="var(--accent-2)" stroke-width="2"/>
+      <text x="96" y="138" font-size="12" fill="var(--accent-2)">webcam anchor (29.8)</text>
+      <line x1="90" y1="106" x2="90" y2="134" stroke="var(--accent-2)" stroke-opacity="0.5"/>
+    </svg>
+    <figcaption>Filled: actions. Hollow: observations (recording anchors). The gap from <code>sync_point</code> to armed (0.9 ms) is shared by every stream; the gap from armed to each anchor is per stream.</figcaption>
+  </figure>
+  <ul>
+    <li><b>sync_point, then armed:</b> the start readings come first so that every later timestamp has a reference, and the files are opened before armed so that no sample arrives with nowhere to go. The 0.9 ms between the two is the same for every stream, but it isn't a constant: it's however long opening the files took this time.</li>
+    <li><b>armed, then each anchor:</b> this is each stream's own start-up delay, here 13.3 ms for the microphone and 28.9 ms for the webcam. It is partly a bias of that kind of device and partly chance: in an earlier run the same webcam took 10 ms and the microphone 108 ms.</li>
+    <li><b>The anchors usually land inside the wait, but nothing makes them.</b> A stream that takes longer than about 200 ms gets its anchor after the start chirp. Its recording then misses the start of the episode, and if it's an audio recording, the chirp isn't in it. That's worth checking for in monitoring (A1).</li>
+    <li><b>The task starts after the chirp.</b> The countdown and the chirp are the operator's cue, so the samples written before the chirp are usually the "hand at rest" values. That's an operating rule, not something SyncField enforces.</li>
+  </ul>
 
   <h2 id="stamp"><span class="num">4</span>Where timestamps are taken</h2>
   <p>01-time section 7 asked where along the way from the device to the program the timestamp should be taken. Each of the three adapters in our labs has a different path from the device into the program. SyncField stamps <code>capture_ns</code> at the point where the data comes into its own code.</p>
@@ -361,10 +406,141 @@ chirp score:  ▁▁▁▁▁▁▁▁▁█▁▁▁▁▁▁▁▁▁   one sh
       <li>Outcome ②'s time is <code>software_ns</code>, read just before the audio stream is created.</li>
       <li>Which outcome happened is the <b>source</b> tag: <code>"hardware"</code> (①, the time came from the audio hardware side), <code>"software_fallback"</code> (②, the program's own reading used as a fallback; the docs put its precision at about 1 ms jitter), <code>"silent"</code> (③).</li>
       <li>All three travel together in a <code>ChirpEmission</code>. The orchestrator writes <code>hardware_ns</code> if present, else <code>software_ns</code>, to <code>sync_point.json</code> as <code>chirp_start_ns</code> / <code>chirp_stop_ns</code>, and the tag as <code>chirp_start_source</code> / <code>chirp_stop_source</code>.</li>
-      <li>The start chirp plays about 200 ms after every stream has started (<code>post_start_stabilization_ms</code>), to let the audio pipelines warm up. That's the ~205 ms you see for <code>chirp_start</code> in lab 3's output.</li>
+      <li>The fixed wait before the start chirp is <code>post_start_stabilization_ms</code> (200 ms). Lab 3 shows <code>chirp_start</code> at about 250–260 ms: the 200 ms wait, plus opening the speaker stream and the audio buffer wait, since <code>hardware_ns</code> is when the sound left the speaker.</li>
     </ul>
   </div>
   <p>In the overall pipeline: everything above happens in the <b>capture</b> stage and leaves just two values per chirp in <code>sync_point.json</code>. The <b>alignment</b> stage (SyncField's closed sync service; A3 for us) is what later finds the chirp in each audio track and uses those values.</p>
+
+  <h3>What the alignment stage gets from two chirps</h3>
+  <p>A recording file has a clock of its own. In a <code>.wav</code> file, position is time: the <i>n</i>-th number was recorded at <i>n</i> ÷ 44,100 s after the file began, <b>if</b> the sound card's ADC really measures exactly 44,100 times a second. Like any device clock (01-time section 3), it doesn't quite. So turning a position in the file into host time needs the same two things as in 01-time lab 3: an <b>offset</b> (where the file sits on the host clock) and a <b>drift</b> (how fast the file's clock runs compared with the host's).</p>
+  <p>Each chirp gives one point where both clocks are known for the same instant: "host time <code>chirp_start_ns</code>" and "position found by cross-correlation in the file". One point fixes the offset. Two points, the start and the stop chirp, fix the drift too:</p>
+  <ol>
+    <li><b>Shift.</b> Move the file's timeline until its start chirp sits on the host's start chirp. That shift is the offset.</li>
+    <li><b>Stretch.</b> If the file's clock ran at exactly the host's rate, the stop chirps would now line up as well. If they don't, stretch the file's timeline around the start chirp until they do. How much you had to stretch is the drift.</li>
+  </ol>
+  <figure>
+    <svg id="drift-fig" viewBox="0 0 640 210" role="img" aria-label="Two timelines, the host clock and the wav file's clock. The wav timeline is first shifted so the start chirps line up, then stretched so the stop chirps line up.">
+      <text x="30" y="34" font-size="12" fill="currentColor" fill-opacity="0.7">host clock (s since sync_point)</text>
+      <line x1="30" y1="60" x2="620" y2="60" stroke="currentColor" stroke-opacity="0.5"/>
+      <g id="host-ticks" font-size="11" fill="currentColor" fill-opacity="0.6" text-anchor="middle"></g>
+      <circle cx="0" cy="60" r="6" id="host-start" fill="var(--accent)"/>
+      <circle cx="0" cy="60" r="6" id="host-stop" fill="var(--accent)"/>
+      <line id="link-start" y1="66" y2="144" stroke="var(--accent)" stroke-dasharray="4 3" stroke-opacity="0.7"/>
+      <line id="link-stop" y1="66" y2="144" stroke="var(--accent)" stroke-dasharray="4 3" stroke-opacity="0.7"/>
+      <g id="wav-line">
+        <line x1="30" y1="150" x2="620" y2="150" stroke="var(--accent-2)" stroke-opacity="0.7" vector-effect="non-scaling-stroke"/>
+        <g id="wav-ticks" font-size="11" fill="var(--accent-2)" text-anchor="middle"></g>
+        <circle id="wav-start" cy="150" r="6" fill="var(--accent-2)"/>
+        <circle id="wav-stop" cy="150" r="6" fill="var(--accent-2)"/>
+      </g>
+      <text x="30" y="198" font-size="12" fill="var(--accent-2)">wav file's clock (position ÷ 44,100, in s)</text>
+    </svg>
+    <p class="step-note" id="drift-note"></p>
+    <div class="controls">
+      <button type="button" data-step="0">Reset</button>
+      <button type="button" data-step="1">1. Shift (offset)</button>
+      <button type="button" data-step="2">2. Stretch (drift)</button>
+      <button type="button" data-step="play">Play both</button>
+    </div>
+    <figcaption>Dots are the start and stop chirps. The drift here is exaggerated about 100× so the stretch is visible; the real one is far too small to see.</figcaption>
+  </figure>
+  <p>After both steps, any position in the file maps to host time by the straight line through the two chirp points, exactly the offset-plus-drift line of 01-time lab 3. This works only for things that recorded the sound. A glove has no microphone, so it never hears the chirp; its samples are already on the host clock through <code>capture_ns</code>, and its own clock is corrected with <code>device_timestamp_ns</code> instead (lab 1, lab 3).</p>
+  <p>Done by hand on lab 2's <code>host_audio.wav</code> (cross-correlation with the known 400 → 2500 Hz sweep):</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th></th><th>Found in the wav</th><th>Host time, from the microphone's first block arriving</th></tr></thead>
+    <tbody>
+      <tr><td>Start chirp</td><td>number 19,881 → 450.8 ms</td><td>245.4 ms</td></tr>
+      <tr><td>Stop chirp</td><td>number 242,911 → 5508.2 ms</td><td>5304.2 ms</td></tr>
+      <tr><td>Gap between them</td><td>5057.4 ms</td><td>5058.8 ms</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <ul>
+    <li><b>The gaps agree to 1.4 ms</b> over 5 s, so the two clocks are describing the same two events. The ratio of the gaps, about 280 ppm, is this run's drift estimate. Audio clocks are usually off by tens of ppm, so part of it is probably error in locating the chirps; one run can't separate the two, and A3 does it properly.</li>
+    <li><b>Both positions are about 205 ms later in the file than on the host's books.</b> That's the hidden gap the chirp exists to reveal. At least 100 ms of it is understood: the microphone's arrival time is read when a 0.1 s block has <i>finished</i> filling, so the file's first number was recorded at least 100 ms before the first arrival time. The rest is not yet checked; output and input latency are the likely parts.</li>
+  </ul>
+  <script>
+  (function () {
+    const fig = document.getElementById("drift-fig");
+    if (!fig) return;
+    const PX = 90, X0 = 30;                  // 90 px per second, starting at x = 30
+    const hostX = t => X0 + t * PX;
+    const tStart = 0.26, tStop = 5.32;       // host times of the two chirps (s)
+    const uStart = 0.45, uStop = 0.45 + (tStop - tStart) / 1.03;  // wav times, with a 3% clock error
+    const ns = "http://www.w3.org/2000/svg";
+    function ticks(group, y, color) {
+      for (let s = 0; s <= 6; s++) {
+        const x = X0 + s * PX;
+        const tick = document.createElementNS(ns, "line");
+        tick.setAttribute("x1", x); tick.setAttribute("x2", x);
+        tick.setAttribute("y1", y - 4); tick.setAttribute("y2", y + 4);
+        tick.setAttribute("stroke", color); tick.setAttribute("stroke-opacity", "0.6");
+        tick.setAttribute("vector-effect", "non-scaling-stroke");
+        const label = document.createElementNS(ns, "text");
+        label.setAttribute("x", x); label.setAttribute("y", y + (y < 100 ? -10 : 20));
+        label.textContent = s;
+        group.append(tick, label);
+      }
+    }
+    ticks(document.getElementById("host-ticks"), 60, "currentColor");
+    ticks(document.getElementById("wav-ticks"), 150, "var(--accent-2)");
+    document.getElementById("host-start").setAttribute("cx", hostX(tStart));
+    document.getElementById("host-stop").setAttribute("cx", hostX(tStop));
+    document.getElementById("wav-start").setAttribute("cx", hostX(uStart));
+    document.getElementById("wav-stop").setAttribute("cx", hostX(uStop));
+
+    // The wav line is drawn at its own positions, then shifted by `shift` px and stretched by
+    // `stretch` around the host's start chirp.
+    const pivot = hostX(tStart);
+    const fullShift = hostX(tStart) - hostX(uStart);
+    const fullStretch = (hostX(tStop) - pivot) / (hostX(uStop) + fullShift - pivot);
+    const states = [
+      { shift: 0, stretch: 1, note: "Each dot is a chirp. Top: where the host's books put it. Bottom: where cross-correlation found it in the wav file. The two timelines don't line up yet." },
+      { shift: fullShift, stretch: 1, note: "1. Shift the wav timeline until the start chirps line up. The shift is the offset. The stop chirps are still apart: the wav file's clock runs at a slightly different rate." },
+      { shift: fullShift, stretch: fullStretch, note: "2. Stretch around the start chirp until the stop chirps line up too. The stretch minus 1 is the drift (here 3%, exaggerated). Now every position in the wav maps onto the host clock." },
+    ];
+    const wavLine = document.getElementById("wav-line");
+    const note = document.getElementById("drift-note");
+    const linkStart = document.getElementById("link-start"), linkStop = document.getElementById("link-stop");
+    let current = { shift: 0, stretch: 1 }, frame = null;
+    function draw(state) {
+      wavLine.setAttribute("transform",
+        `translate(${pivot} 0) scale(${state.stretch} 1) translate(${state.shift - pivot} 0)`);
+      const mapped = x => pivot + state.stretch * (x + state.shift - pivot);
+      linkStart.setAttribute("x1", hostX(tStart)); linkStart.setAttribute("x2", mapped(hostX(uStart)));
+      linkStop.setAttribute("x1", hostX(tStop)); linkStop.setAttribute("x2", mapped(hostX(uStop)));
+      current = state;
+    }
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    function go(index, done) {
+      const target = states[index];
+      note.textContent = target.note;
+      cancelAnimationFrame(frame);
+      if (reduceMotion) { draw(target); if (done) done(); return; }
+      const from = current, began = performance.now(), duration = 1200;
+      function step(now) {
+        const k = Math.min(1, (now - began) / duration), e = k * k * (3 - 2 * k);
+        draw({ shift: from.shift + (target.shift - from.shift) * e,
+               stretch: from.stretch + (target.stretch - from.stretch) * e });
+        if (k < 1) frame = requestAnimationFrame(step); else if (done) done();
+      }
+      frame = requestAnimationFrame(step);
+    }
+    fig.parentElement.querySelectorAll("button[data-step]").forEach(button => {
+      button.addEventListener("click", () => {
+        const step = button.dataset.step;
+        if (step === "play") {
+          draw(states[0]); go(0);
+          setTimeout(() => go(1, () => setTimeout(() => go(2), 900)), 900);
+        } else {
+          go(Number(step));
+        }
+      });
+    });
+    draw(states[0]); note.textContent = states[0].note;
+  })();
+  </script>
 
   <h2 id="borrow"><span class="num">7</span>What we borrow, and what we change</h2>
   <div class="table-wrap">
@@ -390,7 +566,9 @@ chirp score:  ▁▁▁▁▁▁▁▁▁█▁▁▁▁▁▁▁▁▁   one sh
       <tr><th>Stream (adapter)</th><td>A wrapper that gives one device the common five-method lifecycle</td></tr>
       <tr><th>SessionOrchestrator</th><td>Drives all streams through one state machine and owns the writers</td></tr>
       <tr><th>sync point</th><td>A monotonic and a wall-clock reading taken at the same moment at session start</td></tr>
-      <tr><th>recording anchor</th><td>A shared arm time plus each stream's first-frame time, used to estimate per-adapter start-up latency</td></tr>
+      <tr><th>armed (recording armed time)</th><td>One host-clock reading shared by every stream: the start line from which arriving data is written</td></tr>
+      <tr><th>recording anchor</th><td>Per stream: the shared armed time plus the arrival time of its first written sample. An observation, not an action; used to estimate per-adapter start-up delay</td></tr>
+      <tr><th>offset and drift (of a recording)</th><td>Where a file's own timeline sits on the host clock, and how fast it runs compared with it; two chirps found in the file give both</td></tr>
       <tr><th>JSON Lines (JSONL)</th><td>One complete JSON object per line; append-friendly and robust to a crash mid-file</td></tr>
       <tr><th>writer</th><td>An object that owns one stream's row file and appends rows to it</td></tr>
       <tr><th>back-pressure</th><td>A slow later stage (here, the disk) holding up an earlier one (the capture loop); avoided by putting a queue between them</td></tr>
