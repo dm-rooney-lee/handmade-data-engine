@@ -4,15 +4,14 @@ Read the concepts in [concept.html](concept.html), run the experiments in `labs/
 The SyncField source quoted in concept.html is installed at `.venv/lib/python3.12/site-packages/syncfield/` (version 0.8.14).
 
 ```bash
-# from the repo root
+# replace <path to X> with the path to that file or directory from where you run the command
 uv sync --group notes
-cd docs/notes/02-syncfield/labs
-uv run --group notes 1_fake_sensor.py             # default 200Hz, 5 s, no hardware
-uv run --group notes 1_fake_sensor.py 1000 5
-uv run --group notes 2_webcam_mic.py              # default 5 s, audible chirp
-uv run --group notes 3_analyze_episode.py         # analyzes the latest episode from lab 1 or 2
-uv run --group notes 3_analyze_episode.py output/1_fake_sensor/<episode_dir>
-uv run --group notes 3_analyze_episode.py output/2_webcam_mic/<episode_dir>
+uv run --group notes <path to 1_fake_sensor.py>             # default 200Hz, 5 s, no hardware
+uv run --group notes <path to 1_fake_sensor.py> 1000 5
+uv run --group notes <path to 2_webcam_mic.py>              # default 5 s, audible chirp
+uv run --group notes <path to 3_analyze_episode.py>         # analyzes the latest episode from lab 1 or 2
+uv run --group notes <path to 3_analyze_episode.py> <path to labs/output/1_fake_sensor/ep_...>
+uv run --group notes <path to 3_analyze_episode.py> <path to labs/output/2_webcam_mic/ep_...>
 ```
 
 ## Questions

@@ -3,12 +3,12 @@
 Read the concepts in [concept.html](concept.html), run the experiments in `labs/`, and write up what you understood in [my-note.md](my-note.md). Then write your own answer under each question's `Answer:` to check that understanding.
 
 ```bash
-cd labs
-python3 1_clocks.py
-python3 2_sleep_jitter.py            # default 1000Hz, 3 s
-python3 2_sleep_jitter.py 100 3
-python3 3_clock_offset.py            # default drift 40ppm, 600 s session
-python3 3_clock_offset.py 100 3600
+# replace <path to X> with the path to that file from where you run the command
+python3 <path to 1_clocks.py>
+python3 <path to 2_sleep_jitter.py>            # default 1000Hz, 3 s
+python3 <path to 2_sleep_jitter.py> 100 3
+python3 <path to 3_clock_offset.py>            # default drift 40ppm, 600 s session
+python3 <path to 3_clock_offset.py> 100 3600
 ```
 
 ## Questions
