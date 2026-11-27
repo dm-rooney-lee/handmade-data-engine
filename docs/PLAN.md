@@ -32,14 +32,14 @@ Keep the boundaries below while building v1, so that only the affected point nee
 Stack: Python 3.12, FastAPI, React + Vite, PyAV, sounddevice, pyserial, Postgres, MinIO, ESP32 + Arduino C++
 
 ### A0. Concepts (1 week)
-Proceed in order. For each topic: explanation → run labs → answer questions → review.
-Each topic folder `docs/notes/NN-<topic>/` holds the concept explanation (`concept.html`), questions and answers (`summary.md`), and labs (`labs/`).
+Proceed in order. For each topic: explanation → run labs → summarize in my own words → answer questions → review.
+Each topic folder `docs/notes/NN-<topic>/` holds the concept explanation (`concept.html`), labs (`labs/`), my own summary (`my-note.md`), and questions and answers (`quiz.md`).
 1. Time: clock domain, monotonic vs wall clock, sampling rate/jitter
 2. Reading the SyncField code
 3. Reading the OGLO code
 4. Dataset structure: LeRobot format, egocentric datasets (Ego4D, HOT3D)
 5. Imitation learning
-- **Done when**: every question in each topic's `summary.md` is answered and reviewed
+- **Done when**: each topic's `my-note.md` is written, and every question in its `quiz.md` is answered and reviewed
 
 ### A1. Single-stream capture + measurement foundation (1–2 weeks)
 - Webcam recording with per-frame `{frame_number, capture_ns}` written to jsonl

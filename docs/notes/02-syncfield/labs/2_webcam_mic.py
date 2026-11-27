@@ -20,10 +20,10 @@ from pathlib import Path
 import syncfield as sf
 from syncfield.adapters import UVCWebcamStream
 
-OUTPUT_DIR = Path(__file__).parent / "output"
+OUTPUT_DIR = Path(__file__).parent / "output" / Path(__file__).stem  # output/<this lab>/ep_*
 
 
-def main():
+def main() -> None:
     duration_s = float(sys.argv[1]) if len(sys.argv) > 1 else 5
     chirp_mode = sys.argv[2] if len(sys.argv) > 2 else "audible"
 
@@ -41,11 +41,12 @@ def main():
     session.disconnect()
 
     episode_dir = session.last_episode_dir
+    assert episode_dir is not None  # set by stop()
     print(f"\nepisode: {episode_dir}")
-    for path in sorted(episode_dir.iterdir()):
-        print(f"  {path.name:28} {path.stat().st_size:>11,} bytes")
-    for f in report.finalizations:
-        print(f"\n  stream={f.stream_id} status={f.status} frames={f.frame_count}")
+    for episode_file in sorted(episode_dir.iterdir()):
+        print(f"  {episode_file.name:28} {episode_file.stat().st_size:>11,} bytes")
+    for finalization in report.finalizations:
+        print(f"\n  stream={finalization.stream_id} status={finalization.status} frames={finalization.frame_count}")
 
 
 if __name__ == "__main__":
