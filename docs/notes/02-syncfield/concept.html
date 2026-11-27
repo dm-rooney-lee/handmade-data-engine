@@ -352,8 +352,8 @@
   <p>The shape of the sound decides how clear that best score is:</p>
   <ul>
     <li><b>A plain beep</b> (one fixed tone, say 1 kHz) repeats the same wave every 1 ms. Slide it by 1 ms and it still matches almost perfectly, so the score has many near-equal peaks and the true position is ambiguous.</li>
-    <li><b>A hand clap</b> is sharp, but its shape differs every time, and nobody records when it happened on the computer's clock.</li>
-    <li><b>A chirp</b> is a tone whose pitch slides steadily, for example from 17 kHz up to 19 kHz over 500 ms. Every instant has a different pitch, so the recording matches it only at one exact position.</li>
+    <li><b>A hand clap</b> is sharp, but it sounds different every time, so there is no known sound to slide along the recording. And a person claps, not the computer, so the host clock never learns when it happened.</li>
+    <li><b>A chirp</b> is a tone whose pitch slides steadily, for example from 17 kHz up to 19 kHz over 500 ms. Every instant has a different pitch, so the recording matches it only at one exact position. It sounds the same every time it's played, and SyncField saves its settings (<code>chirp_spec</code>), so the aligner can rebuild the known sound exactly.</li>
   </ul>
   <pre><code>beep  score:  ▁▃▆█▆▃▁▃▆█▆▃▁▃▆█▆▃▁   many similar peaks
 chirp score:  ▁▁▁▁▁▁▁▁▁█▁▁▁▁▁▁▁▁▁   one sharp peak</code></pre>
