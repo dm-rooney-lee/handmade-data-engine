@@ -51,11 +51,19 @@ def report_intervals(json_lines: list[JsonLine], target_hz: float | None) -> Non
     duration_s = (capture_ns_list[-1] - capture_ns_list[0]) / 1e9
     expected_interval_ns = 1e9 / target_hz if target_hz else percentile(intervals_ns, 0.5)
     late_count = sum(1 for interval_ns in intervals_ns if interval_ns > 2 * expected_interval_ns)
+    rate_hz = (len(capture_ns_list) - 1) / duration_s
     print(
-        f"    rate={(len(capture_ns_list) - 1) / duration_s:8.2f}Hz (target {target_hz or '?'})  "
+        f"    rate={rate_hz:8.2f}Hz (target {target_hz or '?'})  "
         f"p50={percentile(intervals_ns, 0.5) / 1e3:8.1f}us  p99={percentile(intervals_ns, 0.99) / 1e3:8.1f}us  "
         f"max={intervals_ns[-1] / 1e3:8.1f}us  late(>2x)={late_count}"
     )
+    if target_hz:
+        mean_interval_ns = duration_s * 1e9 / (len(capture_ns_list) - 1)
+        print(
+            f"    vs target: rate {(rate_hz - target_hz) / target_hz * 100:+.1f}%  "
+            f"mean interval {mean_interval_ns / 1e3:.1f}us = target {expected_interval_ns / 1e3:.1f}us "
+            f"{(mean_interval_ns - expected_interval_ns) / 1e3:+.1f}us per sample"
+        )
 
 
 def report_two_clocks(json_lines: list[JsonLine]) -> None:
